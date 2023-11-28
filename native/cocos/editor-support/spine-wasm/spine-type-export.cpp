@@ -1588,7 +1588,6 @@ EMSCRIPTEN_BINDINGS(spine) {
         .constructor<>()
         .property("isCache", &SpineSkeletonInstance::isCache)
         .property("dtRate", &SpineSkeletonInstance::dtRate)
-        .property("isDelete", &SpineSkeletonInstance::isDelete)
         .property("enable", &SpineSkeletonInstance::enable)
         .function("initSkeleton", &SpineSkeletonInstance::initSkeleton, allow_raw_pointers())
         .function("setAnimation", &SpineSkeletonInstance::setAnimation, allow_raw_pointers())
@@ -1604,6 +1603,7 @@ EMSCRIPTEN_BINDINGS(spine) {
         .function("getAnimationState", &SpineSkeletonInstance::getAnimationState, allow_raw_pointer<AnimationState>())
         .function("setMix", &SpineSkeletonInstance::setMix)
         .function("setListener", &SpineSkeletonInstance::setListener)
+        .function("setTrackEntryListener", &SpineSkeletonInstance::setTrackEntryListener, allow_raw_pointer<TrackEntry *>())
         .function("setDebugMode", &SpineSkeletonInstance::setDebugMode)
         .function("getDebugShapes", &SpineSkeletonInstance::getDebugShapes)
         .function("resizeSlotRegion", &SpineSkeletonInstance::resizeSlotRegion)
@@ -1612,7 +1612,8 @@ EMSCRIPTEN_BINDINGS(spine) {
     class_<SpineSkeletonSystem>("SkeletonSystem")
         .class_function("getCount", &SpineSkeletonSystem::getCount) 
         .class_function("updateAnimation", &SpineSkeletonSystem::updateAnimation)
-        .class_function("updateRenderData", &SpineSkeletonSystem::updateRenderData);
+        .class_function("updateRenderData", &SpineSkeletonSystem::updateRenderData)
+        .class_function("destroySpineInstance", &SpineSkeletonSystem::destroySpineInstance, allow_raw_pointers());
 }
 
 EMSCRIPTEN_BINDINGS(cocos_spine) {
@@ -1625,7 +1626,6 @@ EMSCRIPTEN_BINDINGS(cocos_spine) {
     .class_function("createSpineSkeletonDataWithBinary", &SpineWasmUtil::createSpineSkeletonDataWithBinary, allow_raw_pointers())
     .class_function("registerSpineSkeletonDataWithUUID", &SpineWasmUtil::registerSpineSkeletonDataWithUUID, allow_raw_pointers())
     .class_function("destroySpineSkeletonDataWithUUID", &SpineWasmUtil::destroySpineSkeletonDataWithUUID)
-    .class_function("destroySpineInstance", &SpineWasmUtil::destroySpineInstance, allow_raw_pointers())
     .class_function("getCurrentListenerID", &SpineWasmUtil::getCurrentListenerID)
     .class_function("getCurrentEventType", &SpineWasmUtil::getCurrentEventType)
     .class_function("getCurrentTrackEntry", &SpineWasmUtil::getCurrentTrackEntry, allow_raw_pointers())
