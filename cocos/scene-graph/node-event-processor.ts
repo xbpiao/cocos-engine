@@ -25,13 +25,14 @@
 import { CallbacksInvoker } from '../core/event/callbacks-invoker';
 import { Event, EventMouse, EventTouch, Touch } from '../input/types';
 import { Vec2 } from '../core/math/vec2';
-import { Node } from './node';
-import { legacyCC } from '../core/global-exports';
+import type { Node } from './node';
+import { cclegacy } from '../core/global-exports';
 import { Component } from './component';
 import { NodeEventType } from './node-event';
 import { InputEventType, SystemEventTypeUnion } from '../input/types/event-enum';
+import { Pool } from '../core';
 
-const _cachedArray = new Array<Node>(16);
+const _arrayPool = new Pool((): Array<Node> => new Array<Node>(16), 3);
 let _currentHovered: Node | null = null;
 const pos = new Vec2();
 
@@ -62,6 +63,8 @@ export enum DispatcherEventType {
     MARK_LIST_DIRTY,
 }
 
+const globalCallbacksInvoker = new CallbacksInvoker<DispatcherEventType>();
+
 /**
  * @en The event processor for Node
  * @zh 节点事件类。
@@ -74,7 +77,7 @@ export class NodeEventProcessor {
     /**
      * @internal
      */
-    public static callbacksInvoker = new CallbacksInvoker<DispatcherEventType>();
+    public static callbacksInvoker = globalCallbacksInvoker;
 
     /**
      * Whether the node event is enabled
@@ -132,7 +135,11 @@ export class NodeEventProcessor {
     // Whether dispatch cancel event when node is destroyed.
     private _dispatchingTouch: Touch | null = null;
     private _isEnabled = false;
-    private _node: Node;
+    private declare _node: Node;
+    // Indicate whether the mouse leaves window(only support one window). If it is
+    // true, then will not continue dispatching mouse events, such as mouse move events.
+    // Tested on macOS, mouse move events will be triggered once even mouse leaves the window.
+    private _isMouseLeaveWindow = false;
 
     constructor (node: Node) {
         this._node = node;
@@ -154,7 +161,7 @@ export class NodeEventProcessor {
         if (value) {
             this._attachMask();
         }
-        NodeEventProcessor.callbacksInvoker.emit(DispatcherEventType.MARK_LIST_DIRTY);
+        globalCallbacksInvoker.emit(DispatcherEventType.MARK_LIST_DIRTY);
         if (recursive && children.length > 0) {
             for (let i = 0; i < children.length; ++i) {
                 const child = children[i];
@@ -164,12 +171,11 @@ export class NodeEventProcessor {
     }
 
     public reattach (): void {
-        let currentMaskList: IMask[] | null;
         this.node.walk((node) => {
-            if (!currentMaskList) {
-                currentMaskList = this._searchComponentsInParent(NodeEventProcessor._maskComp);
-            }
-            node.eventProcessor.maskList = currentMaskList;
+            const eventProcessor = node.eventProcessor;
+            // NOTE: When reattaching the current node, the masks of all its descendants need to be recalculated
+            const currentMaskList = eventProcessor._searchComponentsInParent(NodeEventProcessor._maskComp);
+            eventProcessor.maskList = currentMaskList;
         });
     }
 
@@ -180,7 +186,7 @@ export class NodeEventProcessor {
 
         if (this.capturingTarget) this.capturingTarget.clear();
         if (this.bubblingTarget) this.bubblingTarget.clear();
-        NodeEventProcessor.callbacksInvoker.emit(DispatcherEventType.REMOVE_POINTER_EVENT_PROCESSOR, this);
+        globalCallbacksInvoker.emit(DispatcherEventType.REMOVE_POINTER_EVENT_PROCESSOR, this);
         if (this._dispatchingTouch) {
             // Dispatch touch cancel event when node is destroyed.
             const cancelEvent = new EventTouch([this._dispatchingTouch], true, InputEventType.TOUCH_CANCEL);
@@ -240,7 +246,7 @@ export class NodeEventProcessor {
             this.shouldHandleEventMouse = false;
         }
         if (!this._hasPointerListeners()) {
-            NodeEventProcessor.callbacksInvoker.emit(DispatcherEventType.REMOVE_POINTER_EVENT_PROCESSOR, this);
+            globalCallbacksInvoker.emit(DispatcherEventType.REMOVE_POINTER_EVENT_PROCESSOR, this);
         }
     }
 
@@ -255,24 +261,24 @@ export class NodeEventProcessor {
         event.target = owner;
 
         // Event.CAPTURING_PHASE
-        _cachedArray.length = 0;
-        this.getCapturingTargets(event.type, _cachedArray);
+        const cachedArray = _arrayPool.alloc();
+        cachedArray.length = 0;
+        this.getCapturingTargets(event.type, cachedArray);
         // capturing
         event.eventPhase = 1;
-        for (i = _cachedArray.length - 1; i >= 0; --i) {
-            target = _cachedArray[i];
+        for (i = cachedArray.length - 1; i >= 0; --i) {
+            target = cachedArray[i];
             if (target.eventProcessor.capturingTarget) {
                 event.currentTarget = target;
                 // fire event
-                target.eventProcessor.capturingTarget.emit(event.type, event, _cachedArray);
+                target.eventProcessor.capturingTarget.emit(event.type, event, cachedArray);
                 // check if propagation stopped
                 if (event.propagationStopped) {
-                    _cachedArray.length = 0;
+                    _arrayPool.free(cachedArray);
                     return;
                 }
             }
         }
-        _cachedArray.length = 0;
 
         // Event.AT_TARGET
         // checks if destroyed in capturing callbacks
@@ -287,24 +293,26 @@ export class NodeEventProcessor {
 
         if (!event.propagationStopped && event.bubbles) {
             // Event.BUBBLING_PHASE
-            this.getBubblingTargets(event.type, _cachedArray);
+            cachedArray.length = 0;
+            this.getBubblingTargets(event.type, cachedArray);
             // propagate
             event.eventPhase = 3;
-            for (i = 0; i < _cachedArray.length; ++i) {
-                target = _cachedArray[i];
+            for (i = 0; i < cachedArray.length; ++i) {
+                target = cachedArray[i];
                 if (target.eventProcessor.bubblingTarget) {
                     event.currentTarget = target;
                     // fire event
                     target.eventProcessor.bubblingTarget.emit(event.type, event);
                     // check if propagation stopped
                     if (event.propagationStopped) {
-                        _cachedArray.length = 0;
+                        _arrayPool.free(cachedArray);
                         return;
                     }
                 }
             }
         }
-        _cachedArray.length = 0;
+
+        _arrayPool.free(cachedArray);
     }
 
     public hasEventListener (type: SystemEventTypeUnion, callback?: AnyFunction, target?: unknown): boolean {
@@ -357,7 +365,7 @@ export class NodeEventProcessor {
     }
 
     public onUpdatingSiblingIndex (): void {
-        NodeEventProcessor.callbacksInvoker.emit(DispatcherEventType.MARK_LIST_DIRTY);
+        globalCallbacksInvoker.emit(DispatcherEventType.MARK_LIST_DIRTY);
     }
 
     private _searchComponentsInParent<T extends Component> (ctor: Constructor<T> | null): IMask[] | null {
@@ -365,7 +373,7 @@ export class NodeEventProcessor {
         if (ctor) {
             let index = 0;
             let list: IMask[] = [];
-            for (let curr: Node | null = node; curr && Node.isNode(curr); curr = curr.parent, ++index) {
+            for (let curr: Node | null = node; curr && cclegacy.Node.isNode(curr); curr = curr.parent, ++index) {
                 const comp = curr.getComponent(ctor);
                 if (comp) {
                     const next = {
@@ -438,7 +446,7 @@ export class NodeEventProcessor {
             this.shouldHandleEventMouse = true;
         }
         if ((isTouchEvent || isMouseEvent) && !this._hasPointerListeners()) {
-            NodeEventProcessor.callbacksInvoker.emit(DispatcherEventType.ADD_POINTER_EVENT_PROCESSOR, this);
+            globalCallbacksInvoker.emit(DispatcherEventType.ADD_POINTER_EVENT_PROCESSOR, this);
         }
     }
 
@@ -457,7 +465,7 @@ export class NodeEventProcessor {
                 this.shouldHandleEventMouse = false;
             }
             if (!this._hasPointerListeners()) {
-                NodeEventProcessor.callbacksInvoker.emit(DispatcherEventType.REMOVE_POINTER_EVENT_PROCESSOR, this);
+                globalCallbacksInvoker.emit(DispatcherEventType.REMOVE_POINTER_EVENT_PROCESSOR, this);
             }
         });
         return callbacksInvoker;
@@ -467,6 +475,7 @@ export class NodeEventProcessor {
 
     /**
      * @engineInternal
+     * @mangle
      */
     public _handleEventMouse (eventMouse: EventMouse): boolean {
         switch (eventMouse.type) {
@@ -478,6 +487,10 @@ export class NodeEventProcessor {
             return this._handleMouseUp(eventMouse);
         case InputEventType.MOUSE_WHEEL:
             return this._handleMouseWheel(eventMouse);
+        case InputEventType.MOUSE_LEAVE:
+            return this._handleMouseLeave(eventMouse);
+        case InputEventType.MOUSE_ENTER:
+            return this._handleMouseEnter(eventMouse);
         default:
             return false;
         }
@@ -485,13 +498,14 @@ export class NodeEventProcessor {
 
     private _handleMouseDown (event: EventMouse): boolean {
         const node = this._node;
-        if (!node || !node._uiProps.uiTransformComp) {
+        const uiTransformComp = node._getUITransformComp();
+        if (!node || !uiTransformComp) {
             return false;
         }
 
         event.getLocation(pos);
 
-        if (node._uiProps.uiTransformComp.hitTest(pos, event.windowId)) {
+        if (uiTransformComp.hitTest(pos, event.windowId)) {
             event.type = NodeEventType.MOUSE_DOWN;
             event.bubbles = true;
             node.dispatchEvent(event);
@@ -503,13 +517,14 @@ export class NodeEventProcessor {
 
     private _handleMouseMove (event: EventMouse): boolean {
         const node = this._node;
-        if (!node || !node._uiProps.uiTransformComp) {
+        const uiTransformComp = node._getUITransformComp();
+        if (!node || !uiTransformComp || this._isMouseLeaveWindow) {
             return false;
         }
 
         event.getLocation(pos);
 
-        const hit = node._uiProps.uiTransformComp.hitTest(pos, event.windowId);
+        const hit = uiTransformComp.hitTest(pos, event.windowId);
         if (hit) {
             if (!this.previousMouseIn) {
                 // Fix issue when hover node switched, previous hovered node won't get MOUSE_LEAVE notification
@@ -539,13 +554,14 @@ export class NodeEventProcessor {
 
     private _handleMouseUp (event: EventMouse): boolean {
         const node = this._node;
-        if (!node || !node._uiProps.uiTransformComp) {
+        const uiTransformComp = node._getUITransformComp();
+        if (!node || !uiTransformComp) {
             return false;
         }
 
         event.getLocation(pos);
 
-        if (node._uiProps.uiTransformComp.hitTest(pos, event.windowId)) {
+        if (uiTransformComp.hitTest(pos, event.windowId)) {
             event.type = NodeEventType.MOUSE_UP;
             event.bubbles = true;
             node.dispatchEvent(event);
@@ -557,13 +573,14 @@ export class NodeEventProcessor {
 
     private _handleMouseWheel (event: EventMouse): boolean {
         const node = this._node;
-        if (!node || !node._uiProps.uiTransformComp) {
+        const uiTransformComp = node._getUITransformComp();
+        if (!node || !uiTransformComp) {
             return false;
         }
 
         event.getLocation(pos);
 
-        if (node._uiProps.uiTransformComp.hitTest(pos, event.windowId)) {
+        if (uiTransformComp.hitTest(pos, event.windowId)) {
             event.type = NodeEventType.MOUSE_WHEEL;
             event.bubbles = true;
             node.dispatchEvent(event);
@@ -573,37 +590,61 @@ export class NodeEventProcessor {
         }
         return false;
     }
+
+    private _handleMouseLeave (event: EventMouse): boolean {
+        this._isMouseLeaveWindow = true;
+        if (this.previousMouseIn) {
+            event.type = NodeEventType.MOUSE_LEAVE;
+            this._node.dispatchEvent(event);
+            this.previousMouseIn = false;
+            _currentHovered = null;
+        }
+        return false;
+    }
+
+    private _handleMouseEnter (event: EventMouse): boolean {
+        this._isMouseLeaveWindow = false;
+        return false;
+    }
+
     // #endregion handle mouse event
 
     // #region handle touch event
 
     /**
      * @engineInternal
+     * @mangle
      */
     public _handleEventTouch (eventTouch: EventTouch): boolean | void {
-        switch (eventTouch.type) {
-        case InputEventType.TOUCH_START:
-            return this._handleTouchStart(eventTouch);
-        case InputEventType.TOUCH_MOVE:
-            return this._handleTouchMove(eventTouch);
-        case InputEventType.TOUCH_END:
-            return this._handleTouchEnd(eventTouch);
-        case InputEventType.TOUCH_CANCEL:
-            return this._handleTouchCancel(eventTouch);
-        default:
-            return false;
+        try {
+            switch (eventTouch.type) {
+            case InputEventType.TOUCH_START:
+                return this._handleTouchStart(eventTouch);
+            case InputEventType.TOUCH_MOVE:
+                return this._handleTouchMove(eventTouch);
+            case InputEventType.TOUCH_END:
+                return this._handleTouchEnd(eventTouch);
+            case InputEventType.TOUCH_CANCEL:
+                return this._handleTouchCancel(eventTouch);
+            default:
+                return false;
+            }
+        } catch (err) {
+            this.claimedTouchIdList.length = 0;
+            throw err;
         }
     }
 
     private _handleTouchStart (event: EventTouch): boolean {
         const node = this.node;
-        if (!node || !node._uiProps.uiTransformComp) {
+        const uiTransformComp = node._getUITransformComp();
+        if (!node || !uiTransformComp) {
             return false;
         }
 
         event.getLocation(pos);
 
-        if (node._uiProps.uiTransformComp.hitTest(pos, event.windowId)) {
+        if (uiTransformComp.hitTest(pos, event.windowId)) {
             event.type = NodeEventType.TOUCH_START;
             event.bubbles = true;
             this._dispatchingTouch = event.touch;
@@ -616,7 +657,7 @@ export class NodeEventProcessor {
 
     private _handleTouchMove (event: EventTouch): boolean {
         const node = this.node;
-        if (!node || !node._uiProps.uiTransformComp) {
+        if (!node || !node._getUITransformComp()) {
             return false;
         }
 
@@ -629,13 +670,14 @@ export class NodeEventProcessor {
 
     private _handleTouchEnd (event: EventTouch): void {
         const node = this.node;
-        if (!node || !node._uiProps.uiTransformComp) {
+        const uiTransformComp = node._getUITransformComp();
+        if (!node || !uiTransformComp) {
             return;
         }
 
         event.getLocation(pos);
 
-        if (node._uiProps.uiTransformComp.hitTest(pos, event.windowId)) {
+        if (uiTransformComp.hitTest(pos, event.windowId)) {
             event.type = NodeEventType.TOUCH_END;
         } else {
             event.type = NodeEventType.TOUCH_CANCEL;
@@ -647,7 +689,7 @@ export class NodeEventProcessor {
 
     private _handleTouchCancel (event: EventTouch): void {
         const node = this.node;
-        if (!node || !node._uiProps.uiTransformComp) {
+        if (!node || !node._getUITransformComp()) {
             return;
         }
 
@@ -660,4 +702,4 @@ export class NodeEventProcessor {
     // #endregion handle touch event
 }
 
-legacyCC.NodeEventProcessor = NodeEventProcessor;
+cclegacy.NodeEventProcessor = NodeEventProcessor;

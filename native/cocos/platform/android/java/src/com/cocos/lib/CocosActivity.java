@@ -24,6 +24,8 @@
 
 package com.cocos.lib;
 
+import android.content.Context;
+import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.media.AudioManager;
@@ -45,6 +47,7 @@ import java.util.List;
 
 public class CocosActivity extends GameActivity {
     private static final String TAG = "CocosActivity";
+    private static final int INITIAL_ROTATION = -1;
     private CocosWebViewHelper mWebViewHelper = null;
     private CocosVideoHelper mVideoHelper = null;
 
@@ -52,21 +55,23 @@ public class CocosActivity extends GameActivity {
     private List<CocosSurfaceView> mSurfaceViewArray;
     private FrameLayout mRootLayout;
 
+    private int mRotation = INITIAL_ROTATION;
 
 
-    private native void onCreateNative();
+
+    private native void onCreateNative(Context applicationContext);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         onLoadNativeLibraries();
-        onCreateNative();
+        onCreateNative(this.getApplicationContext());
 
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().requestFeature(Window.FEATURE_NO_TITLE);
         super.onCreate(savedInstanceState);
 
         // GlobalObject.init should be initialized at first.
-        GlobalObject.init(this, this);
+        GlobalObject.init(this.getApplicationContext(), this);
 
         CocosHelper.registerBatteryLevelReceiver(this);
         CocosHelper.init();
@@ -133,7 +138,22 @@ public class CocosActivity extends GameActivity {
         CocosHelper.unregisterBatteryLevelReceiver(this);
         CocosAudioFocusManager.unregisterAudioFocusListener(this);
         CanvasRenderingContext2DImpl.destroy();
+        CocosHelper.destroy();
         GlobalObject.destroy();
+        CocosWebViewHelper.resetStaticVariables();
+        CocosSensorHandler.resetStaticVariables();
+
+        mVideoHelper.destroy();
+        mSurfaceView.setOnTouchListener(null);
+        mSurfaceView.getHolder().removeCallback(this);
+
+        mRootLayout.removeAllViews();
+        mRootLayout = null;
+
+        mSensorHandler = null;
+        mWebViewHelper = null;
+        mVideoHelper = null;
+        mSurfaceView = null;
     }
 
     @Override
@@ -171,6 +191,18 @@ public class CocosActivity extends GameActivity {
             for (CocosSurfaceView surfaceView : mSurfaceViewArray) {
                 surfaceView.setVisibility(View.VISIBLE);
             }
+        }
+        if (mRotation == INITIAL_ROTATION
+            && getRequestedOrientation() == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE) {
+            //onConfigurationChange can be triggered at the mode of 'sensor or fullSensor'. Here only handles the sensorLandscape mode.
+            mRotation = CocosHelper.getDeviceRotation();
+            mSurfaceView.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                int rotation = CocosHelper.getDeviceRotation();
+                if (mRotation != rotation) {
+                    mRotation = rotation;
+                    this.onConfigurationChangedNative(this.getGameActivityNativeHandle());
+                }
+            });
         }
     }
 

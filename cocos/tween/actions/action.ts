@@ -25,15 +25,9 @@
  THE SOFTWARE.
 */
 
-import { logID, errorID } from '../../core';
-import { Node } from '../../scene-graph';
+import type { Tween } from '../tween';
 
-/**
- * @en Base classAction for action classes.
- * @zh Action 类是所有动作类型的基类。
- * @class Action
- */
-export class Action {
+export enum ActionEnum {
     /**
      * @en Default Action tag.
      * @zh 默认动作标签。
@@ -41,11 +35,41 @@ export class Action {
      * @static
      * @default -1
      */
-    static TAG_INVALID = -1;
+    TAG_INVALID = -1,
+}
 
-    protected originalTarget: Node | null = null;
-    protected target: Node | null = null;
-    protected tag = Action.TAG_INVALID;
+/**
+ * @en Base classAction for action classes.
+ * @zh Action 类是所有动作类型的基类。
+ * @class Action
+ */
+export abstract class Action {
+    /**
+     * The `originalTarget` and `target` are both assigned in `startWithTarget` method,
+     * and they get the same value normally. The difference between `originalTarget` and
+     * `target` is that `target` will be set to null after `stop` method is invoked
+     * but `originalTarget` will not. Therefore, ActionManager could remove a stopped action
+     * from hash map by searching action's `originalTarget`. You could refer to
+     * ActionManager.removeAction for the details.
+     */
+    protected originalTarget: unknown = null;
+    protected target: unknown = null;
+
+    /**
+     * The tween who owns this action.
+     * @engineInternal
+     * @mangle
+     */
+    public _owner: Tween | null = null;
+
+    protected tag = ActionEnum.TAG_INVALID;
+
+    /**
+     * @en The identifier that to mark an internal action.
+     */
+    protected _id: number | undefined = undefined;
+
+    protected _paused = false;
 
     /**
      * @en
@@ -55,13 +79,7 @@ export class Action {
      * @method clone
      * @return {Action}
      */
-    clone (): Action {
-        const action = new Action();
-        action.originalTarget = null;
-        action.target = null;
-        action.tag = this.tag;
-        return action;
-    }
+    abstract clone (): Action;
 
     /**
      * @en
@@ -75,7 +93,7 @@ export class Action {
     }
 
     // called before the action start. It will also set the target.
-    startWithTarget (target: any): void {
+    startWithTarget<T> (target: T | null): void {
         this.originalTarget = target;
         this.target = target;
     }
@@ -86,14 +104,10 @@ export class Action {
     }
 
     // called every frame with it's delta time. <br />
-    step (dt: number): void {
-        logID(1006);
-    }
+    abstract step (dt: number): void;
 
     // Called once per frame. Time is the number of seconds of a frame interval.
-    update (dt: number): void {
-        logID(1007);
-    }
+    abstract update (dt: number): void;
 
     /**
      * @en get the target.
@@ -101,8 +115,8 @@ export class Action {
      * @method getTarget
      * @return {object}
      */
-    getTarget (): Node | null {
-        return this.target;
+    getTarget<T> (): T | null {
+        return this.target as T;
     }
 
     /**
@@ -111,7 +125,7 @@ export class Action {
      * @method setTarget
      * @param {object} target
      */
-    setTarget (target: Node): void {
+    setTarget<T> (target: T): void {
         this.target = target;
     }
 
@@ -121,15 +135,59 @@ export class Action {
      * @method getOriginalTarget
      * @return {object}
      */
-    getOriginalTarget (): Node | null {
-        return this.originalTarget;
+    getOriginalTarget<T> (): T | null {
+        return this.originalTarget as T;
     }
 
     // Set the original target, since target can be nil.
     // Is the target that were used to run the action.
     // Unless you are doing something complex, like `ActionManager`, you should NOT call this method.
-    setOriginalTarget (originalTarget: any): void {
+    setOriginalTarget<T> (originalTarget: T): void {
         this.originalTarget = originalTarget;
+    }
+
+    /**
+     * Return the worker target of the current action applys on.
+     * @engineInternal
+     * @mangle
+     *
+     * Example 1:
+     * ```ts
+     *   tween(node).to(1, { scale: new Vec3(2, 2, 2) }).start();
+     *   // target and original target are both `node`, _getWorkerTarget returns `null`.
+     * ```
+     *
+     * Example 2:
+     * ```ts
+     *   tween(node).parallel(                                        // ----- Root tween
+     *       tween(node).to(1, { scale: new Vec3(2, 2, 2) }),         // ----- Sub tween 1
+     *       tween(node).to(1, { position: new Vec3(10, 10, 10) })    // ----- Sub Tween 2
+     *   ).start();
+     *   // Note that only root tween is started here. We call tweens in `parallel`/`sequence` sub tweens.
+     *   // The `target` and `originalTarget` of all internal actions are `node`.
+     *   // Actions in root tween: _getWorkerTarget returns `node`,
+     *   // Actions in sub tween 1: _getWorkerTarget returns `node`,
+     *   // Actions in sub tween 2: _getWorkerTarget returns `node`.
+     * ```
+     *
+     * Example 3:
+     * ```ts
+     *   tween(node).parallel(                                        // ----- Root tween
+     *       tween(node).to(1, { scale: new Vec3(2, 2, 2) }),         // ----- Sub tween 1
+     *       tween(node.getComponent(UITransform)).to(1, {            // ----- Sub Tween 2
+     *           contentSize: new Size(10, 10)
+     *       })
+     *   ).start();
+     *   // Note that only root tween is started here. We call tweens in `parallel`/`sequence` sub tweens.
+     *   // The `target` and `originalTarget` of all internal actions are `node`.
+     *   // Actions in root tween: workerTarget = `node`,
+     *   // Actions in sub tween 1: workerTarget = `node`,
+     *   // Actions in sub tween 2: workerTarget = `node`'s UITransform component.
+     * ```
+     */
+    protected _getWorkerTarget<T> (): T | null {
+        const workerTarget: T | null = this._owner?.getTarget();
+        return (workerTarget ?? this.target) as T;
     }
 
     /**
@@ -153,6 +211,26 @@ export class Action {
     }
 
     /**
+     * @en Set the identifier of the current action.
+     * @param id @en The identifier to set
+     */
+    setId (id: number): void {
+        this._id = id;
+    }
+
+    /**
+     * @en Get the identifier of the current action.
+     * @return @en The identifier of the current action, it may be undefined if setId is never called.
+     */
+    getId (): number | undefined {
+        return this._id;
+    }
+
+    setPaused (paused: boolean): void {
+        this._paused = paused;
+    }
+
+    /**
      * @en
      * Returns a reversed action. <br />
      * For example: <br />
@@ -163,20 +241,7 @@ export class Action {
      * @method reverse
      * @return {Action | null}
      */
-    reverse (): Action | null {
-        logID(1008);
-        return null;
-    }
-
-    // Currently JavaScript Bindigns (JSB), in some cases, needs to use retain and release. This is a bug in JSB,
-    // and the ugly workaround is to use retain/release. So, these 2 methods were added to be compatible with JSB.
-    // This is a hack, and should be removed once JSB fixes the retain/release bug.
-    retain (): void { }
-
-    // Currently JavaScript Bindigns (JSB), in some cases, needs to use retain and release. This is a bug in JSB,
-    // and the ugly workaround is to use retain/release. So, these 2 methods were added to be compatible with JSB.
-    // This is a hack, and should be removed once JSB fixes the retain/release bug.
-    release (): void { }
+    abstract reverse (): Action | null;
 }
 
 /**
@@ -191,9 +256,16 @@ export class Action {
  * @class FiniteTimeAction
  * @extends Action
  */
-export class FiniteTimeAction extends Action {
-    _duration = 0;
-    _timesForRepeat = 1;
+export abstract class FiniteTimeAction extends Action {
+    protected _duration = 0;
+
+    constructor () {
+        super();
+    }
+
+    getDurationScaled (): number {
+        return this._duration;
+    }
 
     /**
      * @en get duration of the action. (seconds).
@@ -202,7 +274,7 @@ export class FiniteTimeAction extends Action {
      * @return {Number}
      */
     getDuration (): number {
-        return this._duration * (this._timesForRepeat || 1);
+        return this._duration;
     }
 
     /**
@@ -217,117 +289,17 @@ export class FiniteTimeAction extends Action {
 
     /**
      * @en
-     * to copy object with deep copy.
-     * returns a clone of action.
-     * @zh 返回一个克隆的动作。
+     * To copy object with deep copy.
+     * returns a clone of FiniteTimeAction.
+     * @zh 返回一个克隆的有限时间动作。
      * @method clone
      * @return {FiniteTimeAction}
      */
-    clone (): FiniteTimeAction {
-        return new FiniteTimeAction();
-    }
-}
+    abstract clone (): FiniteTimeAction;
 
-/*
- * Changes the speed of an action, making it take longer (speed > 1)
- * or less (speed < 1) time. <br/>
- * Useful to simulate 'slow motion' or 'fast forward' effect.
- */
-export class Speed extends Action {
-    protected _speed = 0;
-    protected _innerAction: Action | null = null;
+    abstract reverse (): FiniteTimeAction;
 
-    /**
-     * @warning This action can't be `Sequence-able` because it is not an `IntervalAction`
-     */
-    constructor (action?: Action, speed = 1) {
-        super();
-        action && this.initWithAction(action, speed);
-    }
-
-    /*
-     * Gets the current running speed. <br />
-     * Will get a percentage number, compared to the original speed.
-     *
-     * @method getSpeed
-     * @return {Number}
-     */
-    getSpeed (): number {
-        return this._speed;
-    }
-
-    /*
-     * alter the speed of the inner function in runtime.
-     * @method setSpeed
-     * @param {Number} speed
-     */
-    setSpeed (speed: number): void {
-        this._speed = speed;
-    }
-
-    /*
-     * initializes the action.
-     * @method initWithAction
-     * @param {ActionInterval} action
-     * @param {Number} speed
-     * @return {Boolean}
-     */
-    initWithAction (action: Action, speed: number): boolean {
-        if (!action) {
-            errorID(1021);
-            return false;
-        }
-
-        this._innerAction = action;
-        this._speed = speed;
-        return true;
-    }
-
-    clone (): Speed {
-        const action = new Speed();
-        action.initWithAction(this._innerAction!.clone(), this._speed);
-        return action;
-    }
-
-    startWithTarget (target: any): void {
-        Action.prototype.startWithTarget.call(this, target);
-        this._innerAction!.startWithTarget(target);
-    }
-
-    stop (): void {
-        this._innerAction!.stop();
-        Action.prototype.stop.call(this);
-    }
-
-    step (dt: number): void {
-        this._innerAction!.step(dt * this._speed);
-    }
-
-    isDone (): boolean {
-        return this._innerAction!.isDone();
-    }
-
-    reverse (): Speed {
-        return new Speed(this._innerAction!.reverse()!, this._speed);
-    }
-
-    /*
-     * Set inner Action.
-     * @method setInnerAction
-     * @param {ActionInterval} action
-     */
-    setInnerAction (action: any): void {
-        if (this._innerAction !== action) {
-            this._innerAction = action;
-        }
-    }
-
-    /*
-     * Get inner Action.
-     * @method getInnerAction
-     * @return {ActionInterval}
-     */
-    getInnerAction (): Action | null {
-        return this._innerAction;
-    }
+    // Returns the state of whether the current action's duration is unknown.
+    // This function may return `false` from `true` at some point while the action is running.
+    abstract isUnknownDuration (): boolean;
 }

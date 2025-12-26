@@ -24,10 +24,9 @@
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  THE SOFTWARE.
 */
-/* eslint-disable @typescript-eslint/ban-types */
-
-import { FiniteTimeAction, Action } from './action';
+import { FiniteTimeAction } from './action';
 import { Renderer } from '../../misc/renderer';
+import type { Node } from '../../scene-graph';
 
 /**
  * @en Instant actions are immediate actions. They don't have a duration like the ActionInterval actions.
@@ -35,16 +34,16 @@ import { Renderer } from '../../misc/renderer';
  * @class ActionInstant
  * @extends FiniteTimeAction
  */
-export class ActionInstant extends FiniteTimeAction {
-    isDone (): boolean {
+export abstract class ActionInstant extends FiniteTimeAction {
+    override isDone (): boolean {
         return true;
     }
 
-    step (dt: any): void {
+    override step (_dt: number): void {
         this.update(1);
     }
 
-    update (dt: number): void {
+    override update (_dt: number): void {
         // nothing
     }
 
@@ -55,12 +54,14 @@ export class ActionInstant extends FiniteTimeAction {
      * - The reversed action will be x of 100 move to 0.
      * @returns {Action}
      */
-    reverse (): Action {
+    override reverse (): ActionInstant {
         return this.clone();
     }
 
-    clone (): ActionInstant {
-        return new ActionInstant();
+    abstract clone (): ActionInstant;
+
+    override isUnknownDuration (): boolean {
+        return false;
     }
 }
 
@@ -69,21 +70,29 @@ export class ActionInstant extends FiniteTimeAction {
  * @class Show
  * @extends ActionInstant
  */
-export class Show extends ActionInstant {
-    update (dt: any): void {
-        const _renderComps = this.target!.getComponentsInChildren(Renderer);
+export class Show<T extends Node> extends ActionInstant {
+    override update (_dt: number): void {
+        const target = this._getWorkerTarget<T>();
+        if (!target) return;
+        const _renderComps = target.getComponentsInChildren(Renderer);
         for (let i = 0; i < _renderComps.length; ++i) {
             const render = _renderComps[i];
             render.enabled = true;
         }
     }
 
-    reverse (): Hide {
-        return new Hide();
+    override reverse (): Hide<T> {
+        return new Hide<T>();
     }
 
-    clone (): Show {
-        return new Show();
+    override clone (): Show<T> {
+        const action = new Show<T>();
+        action._id = this._id;
+        return action;
+    }
+
+    override toString (): string {
+        return '<Show>';
     }
 }
 
@@ -91,13 +100,13 @@ export class Show extends ActionInstant {
  * @en Show the Node.
  * @zh 立即显示。
  * @method show
- * @return {ActionInstant}
+ * @return {Show}
  * @example
  * // example
  * var showAction = show();
  */
-export function show (): ActionInstant {
-    return new Show();
+export function show<T extends Node> (): Show<T> {
+    return new Show<T>();
 }
 
 /*
@@ -105,21 +114,29 @@ export function show (): ActionInstant {
  * @class Hide
  * @extends ActionInstant
  */
-export class Hide extends ActionInstant {
-    update (dt: any): void {
-        const _renderComps = this.target!.getComponentsInChildren(Renderer);
+export class Hide<T extends Node> extends ActionInstant {
+    override update (_dt: number): void {
+        const target = this._getWorkerTarget<T>();
+        if (!target) return;
+        const _renderComps = target.getComponentsInChildren(Renderer);
         for (let i = 0; i < _renderComps.length; ++i) {
             const render = _renderComps[i];
             render.enabled = false;
         }
     }
 
-    reverse (): Show {
-        return new Show();
+    override reverse (): Show<T> {
+        return new Show<T>();
     }
 
-    clone (): Hide {
-        return new Hide();
+    override clone (): Hide<T> {
+        const action = new Hide<T>();
+        action._id = this._id;
+        return action;
+    }
+
+    override toString (): string {
+        return '<Hide>';
     }
 }
 
@@ -127,13 +144,13 @@ export class Hide extends ActionInstant {
  * @en Hide the node.
  * @zh 立即隐藏。
  * @method hide
- * @return {ActionInstant}
+ * @return {Hide}
  * @example
  * // example
  * var hideAction = hide();
  */
-export function hide (): ActionInstant {
-    return new Hide();
+export function hide<T extends Node> (): Hide<T> {
+    return new Hide<T>();
 }
 
 /*
@@ -141,21 +158,29 @@ export function hide (): ActionInstant {
  * @class ToggleVisibility
  * @extends ActionInstant
  */
-export class ToggleVisibility extends ActionInstant {
-    update (dt: any): void {
-        const _renderComps = this.target!.getComponentsInChildren(Renderer);
+export class ToggleVisibility<T extends Node> extends ActionInstant {
+    override update (_dt: number): void {
+        const target = this._getWorkerTarget<T>();
+        if (!target) return;
+        const _renderComps = target.getComponentsInChildren(Renderer);
         for (let i = 0; i < _renderComps.length; ++i) {
             const render = _renderComps[i];
             render.enabled = !render.enabled;
         }
     }
 
-    reverse (): ToggleVisibility {
-        return new ToggleVisibility();
+    override reverse (): ToggleVisibility<T> {
+        return new ToggleVisibility<T>();
     }
 
-    clone (): ToggleVisibility {
-        return new ToggleVisibility();
+    override clone (): ToggleVisibility<T> {
+        const action = new ToggleVisibility<T>();
+        action._id = this._id;
+        return action;
+    }
+
+    override toString (): string {
+        return '<ToggleVisibility>';
     }
 }
 
@@ -163,13 +188,13 @@ export class ToggleVisibility extends ActionInstant {
  * @en Toggles the visibility of a node.
  * @zh 显隐状态切换。
  * @method toggleVisibility
- * @return {ActionInstant}
+ * @return {ToggleVisibility}
  * @example
  * // example
  * var toggleVisibilityAction = toggleVisibility();
  */
-export function toggleVisibility (): ActionInstant {
-    return new ToggleVisibility();
+export function toggleVisibility<T extends Node> (): ToggleVisibility<T> {
+    return new ToggleVisibility<T>();
 }
 
 /*
@@ -182,32 +207,40 @@ export function toggleVisibility (): ActionInstant {
  * // example
  * var removeSelfAction = new RemoveSelf(false);
  */
-export class RemoveSelf extends ActionInstant {
+export class RemoveSelf<T extends Node> extends ActionInstant {
     protected _isNeedCleanUp = true;
 
     constructor (isNeedCleanUp?: boolean) {
         super();
-        isNeedCleanUp !== undefined && this.init(isNeedCleanUp);
+        if (isNeedCleanUp !== undefined) this.init(isNeedCleanUp);
     }
 
-    update (dt: any): void {
-        this.target!.removeFromParent();
+    override update (_dt: number): void {
+        const target = this._getWorkerTarget<T>();
+        if (!target) return;
+        target.removeFromParent();
         if (this._isNeedCleanUp) {
-            this.target!.destroy();
+            target.destroy();
         }
     }
 
-    init (isNeedCleanUp: any): boolean {
+    init (isNeedCleanUp: boolean): boolean {
         this._isNeedCleanUp = isNeedCleanUp;
         return true;
     }
 
-    reverse (): RemoveSelf {
-        return new RemoveSelf(this._isNeedCleanUp);
+    override reverse (): RemoveSelf<T> {
+        return new RemoveSelf<T>(this._isNeedCleanUp);
     }
 
-    clone (): RemoveSelf {
-        return new RemoveSelf(this._isNeedCleanUp);
+    override clone (): RemoveSelf<T> {
+        const action = new RemoveSelf<T>(this._isNeedCleanUp);
+        action._id = this._id;
+        return action;
+    }
+
+    override toString (): string {
+        return '<RemoveSelf>';
     }
 }
 
@@ -216,15 +249,17 @@ export class RemoveSelf extends ActionInstant {
  * @zh 从父节点移除自身。
  * @method removeSelf
  * @param {Boolean} [isNeedCleanUp = true]
- * @return {ActionInstant}
+ * @return {RemoveSelf}
  *
  * @example
  * // example
  * var removeSelfAction = removeSelf();
  */
-export function removeSelf (isNeedCleanUp: boolean): ActionInstant {
-    return new RemoveSelf(isNeedCleanUp);
+export function removeSelf<T extends Node> (isNeedCleanUp: boolean): RemoveSelf<T> {
+    return new RemoveSelf<T>(isNeedCleanUp);
 }
+
+export type CallFuncCallback<Target, Data> = (target?: Target, data?: Data) => void;
 
 /*
  * Calls a 'callback'.
@@ -241,36 +276,36 @@ export function removeSelf (isNeedCleanUp: boolean): ActionInstant {
  * // CallFunc with data
  * var finish = new CallFunc(this.removeFromParentAndCleanup, this,  true);
  */
-export class CallFunc extends ActionInstant {
-    private _selectorTarget = null;
-    private _function: Function | null = null;
-    private _data = null;
+export class CallFunc<CallbackThis, Target, Data> extends ActionInstant {
+    private _callbackThis: CallbackThis | undefined = undefined;
+    private _callback: CallFuncCallback<Target, Data> | undefined = undefined;
+    private _data: Data | undefined = undefined;
 
     /*
-     * Constructor function, override it to extend the construction behavior, remember to call "this._super()" in the extended "ctor" function. <br />
+     * Constructor function, override it to extend the construction behavior, remember to call "super()". <br />
      * Creates a CallFunc action with the callback.
-     * @param {function} selector
-     * @param {object} [selectorTarget=null]
-     * @param {*} [data=null] data for function, it accepts all data types.
+     * @param callback The callback function
+     * @param callbackThis The this object for callback
+     * @param data The custom data passed to the callback function, it accepts all data types.
      */
-    constructor (selector?: Function, selectorTarget?: any, data?: any) {
+    constructor (selector?: CallFuncCallback<Target, Data>, callbackThis?: CallbackThis, data?: Data) {
         super();
-        this.initWithFunction(selector, selectorTarget, data);
+        this.initWithFunction(selector, callbackThis, data);
     }
 
     /*
      * Initializes the action with a function or function and its target
-     * @param {function} selector
-     * @param {object|Null} selectorTarget
-     * @param {*|Null} [data] data for function, it accepts all data types.
-     * @return {Boolean}
+     * @param callback The callback function
+     * @param callbackThis The this object for callback
+     * @param data The custom data passed to the callback function, it accepts all data types.
+     * @return This function always returns true.
      */
-    initWithFunction (selector: any, selectorTarget?: any, data?: any): boolean {
-        if (selector) {
-            this._function = selector;
+    initWithFunction (callback?: CallFuncCallback<Target, Data>, callbackThis?: CallbackThis, data?: Data): boolean {
+        if (callback) {
+            this._callback = callback;
         }
-        if (selectorTarget) {
-            this._selectorTarget = selectorTarget;
+        if (callbackThis) {
+            this._callbackThis = callbackThis;
         }
         if (data !== undefined) {
             this._data = data;
@@ -282,38 +317,43 @@ export class CallFunc extends ActionInstant {
      * execute the function.
      */
     execute (): void {
-        if (this._function) {
-            this._function.call(this._selectorTarget, this.target, this._data);
+        if (this._callback) {
+            const target = this._getWorkerTarget() as Target;
+            this._callback.call(this._callbackThis, target, this._data);
         }
     }
 
-    update (dt: any): void {
+    override update (_dt: number): void {
         this.execute();
     }
 
     /*
      * Get selectorTarget.
-     * @return {object}
+     * @mangle
      */
-    getTargetCallback (): null {
-        return this._selectorTarget;
+    getTargetCallback (): CallbackThis | undefined {
+        return this._callbackThis;
     }
 
     /*
      * Set selectorTarget.
-     * @param {object} sel
+     * @mangle
      */
-    setTargetCallback (sel: any): void {
-        if (sel !== this._selectorTarget) {
-            if (this._selectorTarget) { this._selectorTarget = null; }
-            this._selectorTarget = sel;
+    setTargetCallback (sel: CallbackThis): void {
+        if (sel !== this._callbackThis) {
+            this._callbackThis = sel;
         }
     }
 
-    clone (): CallFunc {
-        const action = new CallFunc();
-        action.initWithFunction(this._function, this._selectorTarget, this._data);
+    override clone (): CallFunc<CallbackThis, Target, Data> {
+        const action = new CallFunc<CallbackThis, Target, Data>();
+        action._id = this._id;
+        if (this._callback) action.initWithFunction(this._callback, this._callbackThis, this._data);
         return action;
+    }
+
+    override toString (): string {
+        return `<CallFunc>`;
     }
 }
 
@@ -333,6 +373,10 @@ export class CallFunc extends ActionInstant {
  * // CallFunc with data
  * var finish = callFunc(this.removeFromParentAndCleanup, this._grossini,  true);
  */
-export function callFunc (selector: Function, selectorTarget?: any, data?: any): ActionInstant {
+export function callFunc<SelectorTarget, Target, Data> (
+    selector: CallFuncCallback<Target, Data>,
+    selectorTarget?: SelectorTarget,
+    data?: Data,
+): ActionInstant {
     return new CallFunc(selector, selectorTarget, data);
 }

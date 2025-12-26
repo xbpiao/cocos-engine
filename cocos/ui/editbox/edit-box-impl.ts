@@ -26,11 +26,12 @@
 */
 
 import { screenAdapter } from 'pal/screen-adapter';
+import { HTML5 } from 'internal:constants';
 import { BitmapFont } from '../../2d/assets';
 import { director } from '../../game/director';
 import { game } from '../../game';
 import { Mat4, Vec3, visibleRect, sys } from '../../core';
-import { view } from '../view';
+import { view, View } from '../view';
 import { KeyCode } from '../../input/types';
 import { contains } from '../../core/utils/misc';
 import { Label } from '../../2d/components/label';
@@ -64,15 +65,15 @@ export class EditBoxImpl extends EditBoxImplBase {
     /**
      * @deprecated since v3.5.0, this is an engine private interface that will be removed in the future.
      */
-    public _inputMode: InputMode = -1;
+    public _inputMode: InputMode = -1 as InputMode;
     /**
      * @deprecated since v3.5.0, this is an engine private interface that will be removed in the future.
      */
-    public _inputFlag: InputFlag = -1;
+    public _inputFlag: InputFlag = -1 as InputFlag;
     /**
      * @deprecated since v3.5.0, this is an engine private interface that will be removed in the future.
      */
-    public _returnType: KeyboardReturnType = -1;
+    public _returnType: KeyboardReturnType = -1 as KeyboardReturnType;
     /**
      * @deprecated since v3.5.0, this is an engine private interface that will be removed in the future.
      */
@@ -102,8 +103,14 @@ export class EditBoxImpl extends EditBoxImplBase {
     private _placeholderLineHeight = null;
     private _placeholderStyleSheet: HTMLStyleElement | null = null;
     private _domId = `EditBoxId_${++_domCount}`;
+    private _forceUpdate: boolean = false;
+
+    constructor () {
+        super();
+    }
 
     public init (delegate: EditBox): void {
+        if (!HTML5) return;
         if (!delegate) {
             return;
         }
@@ -120,9 +127,14 @@ export class EditBoxImpl extends EditBoxImplBase {
         this._initStyleSheet();
         this._registerEventListeners();
         this._addDomToGameContainer();
+        View.instance.on('canvas-resize', this._resize, this);
+        screenAdapter.on('window-resize', this._resize, this);
     }
 
     public clear (): void {
+        if (!HTML5) return;
+        View.instance.off('canvas-resize', this._resize, this);
+        screenAdapter.off('window-resize', this._resize, this);
         this._removeEventListeners();
         this._removeDomFromGameContainer();
 
@@ -136,20 +148,31 @@ export class EditBoxImpl extends EditBoxImplBase {
         this._delegate = null;
     }
 
-    public update (): void {
+    private _resize (): void {
+        this._forceUpdate = true;
+    }
+
+    // The beforeDraw function should be used here.
+    // Because many attributes are modified after the update is executed,
+    // this can lead to problems with incorrect coordinates.
+    public beforeDraw (): void {
+        if (!HTML5) return;
         const node = this._delegate!.node;
-        if (!node.hasChangedFlags) {
+        if (!node.hasChangedFlags && !this._forceUpdate) {
             return;
         }
+        this._forceUpdate = false;
         this._updateMatrix();
     }
 
     public setTabIndex (index: number): void {
+        if (!HTML5) return;
         this._edTxt!.tabIndex = index;
         tabIndexUtil.resort();
     }
 
     public setSize (width: number, height: number): void {
+        if (!HTML5) return;
         const elem = this._edTxt;
         if (elem) {
             elem.style.width = `${width}px`;
@@ -158,11 +181,13 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     public beginEditing (): void {
+        if (!HTML5) return;
         if (_currentEditBoxImpl && _currentEditBoxImpl !== this) {
             _currentEditBoxImpl.setFocus(false);
         }
 
         this._editing = true;
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         _currentEditBoxImpl = this;
         this._delegate!._editBoxEditingDidBegan();
         this._showDom();
@@ -170,20 +195,24 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     public endEditing (): void {
+        if (!HTML5) return;
         this._edTxt!.blur();
     }
 
     private _createInput (): void {
+        if (!HTML5) return;
         this._isTextArea = false;
         this._edTxt = ccdocument.createElement('input');
     }
 
     private _createTextArea (): void {
+        if (!HTML5) return;
         this._isTextArea = true;
         this._edTxt = ccdocument.createElement('textarea');
     }
 
     private _addDomToGameContainer (): void {
+        if (!HTML5) return;
         if (game.container && this._edTxt) {
             game.container.appendChild(this._edTxt);
             ccdocument.head.appendChild(this._placeholderStyleSheet!);
@@ -191,6 +220,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _removeDomFromGameContainer (): void {
+        if (!HTML5) return;
         const hasElem = contains(game.container, this._edTxt);
         if (hasElem && this._edTxt) {
             game.container!.removeChild(this._edTxt);
@@ -205,6 +235,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _showDom (): void {
+        if (!HTML5) return;
         this._updateMaxLength();
         this._updateInputType();
         this._updateStyleSheet();
@@ -218,6 +249,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _hideDom (): void {
+        if (!HTML5) return;
         const elem = this._edTxt;
         if (elem && this._delegate) {
             elem.style.display = 'none';
@@ -229,6 +261,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _showDomOnMobile (): void {
+        if (!HTML5) return;
         if (sys.os !== OS.ANDROID && sys.os !== OS.OHOS) {
             return;
         }
@@ -238,6 +271,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _hideDomOnMobile (): void {
+        if (!HTML5) return;
         if (sys.os === OS.ANDROID || sys.os === OS.OHOS) {
             screenAdapter.handleResizeEvent = true;
         }
@@ -246,6 +280,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _isElementInViewport (): boolean {
+        if (!HTML5) return false;
         if (this._edTxt) {
             const rect = this._edTxt.getBoundingClientRect();
 
@@ -259,6 +294,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _adjustWindowScroll (): void {
+        if (!HTML5) return;
         setTimeout(() => {
             if (ccwindow.scrollY < SCROLLY && !this._isElementInViewport()) {
                 this._edTxt!.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'smooth' });
@@ -267,6 +303,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _scrollBackWindow (): void {
+        if (!HTML5) return;
         setTimeout(() => {
             if (sys.browserType === BrowserType.WECHAT && sys.os === OS.IOS) {
                 if (ccwindow.top) {
@@ -281,6 +318,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _updateMatrix (): void {
+        if (!HTML5) return;
         if (!this._edTxt) {
             return;
         }
@@ -293,13 +331,13 @@ export class EditBoxImpl extends EditBoxImplBase {
         const dpr = screenAdapter.devicePixelRatio;
 
         node.getWorldMatrix(_matrix);
-        const transform = node._uiProps.uiTransformComp;
+        const transform = node._getUITransformComp();
         if (transform) {
             Vec3.set(_vec3, -transform.anchorX * transform.width, -transform.anchorY * transform.height, _vec3.z);
             Mat4.transform(_matrix, _matrix, _vec3);
         }
 
-        if (!node._uiProps.uiTransformComp) {
+        if (!node._getUITransformComp()) {
             return;
         }
 
@@ -345,6 +383,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _updateInputType (): void {
+        if (!HTML5) return;
         const delegate = this._delegate;
         const inputMode = delegate!.inputMode;
         const inputFlag = delegate!.inputFlag;
@@ -416,6 +455,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _updateMaxLength (): void {
+        if (!HTML5) return;
         let maxLength = this._delegate!.maxLength;
         if (maxLength < 0) {
             maxLength = 65535;
@@ -424,6 +464,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _initStyleSheet (): void {
+        if (!HTML5) return;
         if (!this._edTxt) {
             return;
         }
@@ -457,6 +498,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _updateStyleSheet (): void {
+        if (!HTML5) return;
         const delegate = this._delegate;
         const elem = this._edTxt;
         if (elem && delegate) {
@@ -470,6 +512,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _updateTextLabel (textLabel): void {
+        if (!HTML5) return;
         if (!textLabel) {
             return;
         }
@@ -520,6 +563,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _updatePlaceholderLabel (placeholderLabel): void {
+        if (!HTML5) return;
         if (!placeholderLabel) {
             return;
         }
@@ -577,6 +621,7 @@ export class EditBoxImpl extends EditBoxImplBase {
     }
 
     private _registerEventListeners (): void {
+        if (!HTML5) return;
         if (!this._edTxt) {
             return;
         }
@@ -601,7 +646,7 @@ export class EditBoxImpl extends EditBoxImplBase {
             const delegate = this._delegate;
             // input of number type doesn't support maxLength attribute
             const maxLength = delegate!.maxLength;
-            if (maxLength >= 0) {
+            if (maxLength >= 0 && elem.type !== 'number') {
                 elem.value = elem.value.slice(0, maxLength);
             }
             delegate!._editBoxTextChanged(elem.value);
@@ -650,6 +695,7 @@ export class EditBoxImpl extends EditBoxImplBase {
         elem.addEventListener('touchstart', cbs.onClick as EventListenerOrEventListenerObject);
     }
     private _removeEventListeners (): void {
+        if (!HTML5) return;
         if (!this._edTxt) {
             return;
         }

@@ -22,22 +22,25 @@
  THE SOFTWARE.
 */
 
+import { DEBUG } from 'internal:constants';
 import { B2, B2ObjectType, getTSObjectFromWASMObjectPtr } from './instantiated';
 import { IRigidBody2D } from '../spec/i-rigid-body';
 import { RigidBody2D } from '../framework/components/rigid-body-2d';
 import { PhysicsSystem2D } from '../framework/physics-system';
 import { B2PhysicsWorld } from './physics-world';
-import { Vec2, toRadian, Vec3, Quat, IVec2Like, toDegree, TWO_PI, HALF_PI } from '../../core';
+import { Vec2, toRadian, Vec3, Quat, IVec2Like, TWO_PI, HALF_PI, warn } from '../../core';
 import { PHYSICS_2D_PTM_RATIO, ERigidBody2DType } from '../framework/physics-types';
 
 import { Node } from '../../scene-graph/node';
-import { Collider2D, Joint2D } from '../framework';
+import { Collider2D } from '../framework';
 import { B2Shape2D } from './shapes/shape-2d';
 import { B2Joint } from './joints/joint-2d';
 
 const tempVec3 = new Vec3();
 const tempVec2_1 = { x: 0, y: 0 };//new B2.Vec2(0, 0);
-let tempVec2_2 = { x: 0, y: 0 };
+const tempVec2_2 = { x: 0, y: 0 };
+
+/** @mangle */
 export class B2RigidBody2D implements IRigidBody2D {
     get impl (): B2.Body | null {
         return this._body;
@@ -182,19 +185,10 @@ export class B2RigidBody2D implements IRigidBody2D {
         if (!b2body) return;
 
         const pos = this._rigidBody.node.worldPosition;
-
-        //the belowing code seems useless?
-        const bodyType = this._rigidBody.type;
-        if (bodyType === ERigidBody2DType.Animated) {
-            tempVec2_2 = b2body.GetLinearVelocity();
-        } else {
-            tempVec2_2 = b2body.GetPosition();
-        }
-
         tempVec2_2.x = pos.x / PHYSICS_2D_PTM_RATIO;
         tempVec2_2.y = pos.y / PHYSICS_2D_PTM_RATIO;
 
-        if (bodyType === ERigidBody2DType.Animated && enableAnimated) {
+        if (this._rigidBody.type === ERigidBody2DType.Animated && enableAnimated) {
             this._animatedPos.set(tempVec2_2.x, tempVec2_2.y);
         } else {
             b2body.SetTransform(tempVec2_2, b2body.GetAngle());
@@ -230,6 +224,7 @@ export class B2RigidBody2D implements IRigidBody2D {
     }
 
     setType (v: ERigidBody2DType): void {
+        (PhysicsSystem2D.instance.physicsWorld as B2PhysicsWorld)._updateBodyType(this);
         if (v === ERigidBody2DType.Dynamic) {
             this._body!.SetType(B2.BodyType.b2_dynamicBody as B2.BodyType);
         } else if (v === ERigidBody2DType.Kinematic) {
@@ -258,7 +253,11 @@ export class B2RigidBody2D implements IRigidBody2D {
         return this._body!.IsEnabled();
     }
     setActive (v: boolean): void {
-        this._body!.SetEnabled(v);
+        if (!this._body!.GetWorld().IsLocked()) {
+            this._body!.SetEnabled(v);
+        } else if (DEBUG) {
+            warn('Can not active RigidBody in contract listener.');
+        }
     }
     wakeUp (): void {
         this._body!.SetAwake(true);
@@ -291,7 +290,7 @@ export class B2RigidBody2D implements IRigidBody2D {
         this._body!.SetAngularVelocity(v);
     }
     getAngularVelocity (): number {
-        return toDegree(this._body!.GetAngularVelocity());
+        return this._body!.GetAngularVelocity();
     }
 
     getLocalVector<Out extends IVec2Like> (worldVector: IVec2Like, out: Out): Out {

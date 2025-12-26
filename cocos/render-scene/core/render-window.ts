@@ -48,6 +48,10 @@ const orientationMap: Record<Orientation, SurfaceTransform> = {
     [Orientation.LANDSCAPE_LEFT]: SurfaceTransform.ROTATE_270,
 };
 
+// _windowCount is used to generate the render window Id.
+// It is monotonic increasing and unique.
+let _windowCount = 0;
+
 /**
  * @en The render window represents the render target, it could be an off screen frame buffer or the on screen buffer.
  * @zh 渲染窗口代表了一个渲染目标，可以是离屏的帧缓冲，也可以是屏幕缓冲
@@ -91,6 +95,49 @@ export class RenderWindow {
         return this._cameras;
     }
 
+    /**
+     * @en Get render window Id.
+     * Render windowd Id is used to identify the render window in the render pipeline.
+     * @zh 获得渲染窗口Id。渲染窗口Id用于在渲染管线中标识渲染窗口。
+     */
+    get renderWindowId (): number {
+        return this._renderWindowId;
+    }
+
+    /**
+     * @en Get the name of the color attachment.
+     * The name is used to identify the color attachment in the render pipeline.
+     * @zh 获取颜色附件的名称。用于自定义渲染管线中的资源注册。
+     */
+    get colorName (): string {
+        return this._colorName;
+    }
+
+    /**
+     * @en Get the name of the depth stencil attachment.
+     * The name is used to identify the depth stencil attachment in the render pipeline.
+     * @zh 获取深度模板附件的名称。用于自定义渲染管线中的资源注册。
+     */
+    get depthStencilName (): string {
+        return this._depthStencilName;
+    }
+
+    /**
+     * @en The render pipeline should handle the resize event properly
+     * @zh 渲染管线应该正确处理窗口大小变化事件
+     */
+    isRenderWindowResized (): boolean {
+        return this._isResized;
+    }
+
+    /**
+     * @en The render pipeline should set this value to false after handling the resize event
+     * @zh 渲染管线应该在处理完窗口大小变化事件后将此值设置为 false
+     */
+    setRenderWindowResizeHandled (): void {
+        this._isResized = false;
+    }
+
     protected _title = '';
     protected _width = 1;
     protected _height = 1;
@@ -103,6 +150,14 @@ export class RenderWindow {
     protected _hasOffScreenAttachments = false;
     protected _framebuffer: Framebuffer | null = null;
     protected _device: Device | null = null;
+    // _renderWindowId is used to identify the render window in the render pipeline
+    protected _renderWindowId = _windowCount++;
+    // _isResized is used to indicate whether the render window is resized
+    protected _isResized = true;
+    // _colorName is used to identify the color attachment in the render pipeline
+    protected _colorName = `Color${this._renderWindowId}`;
+    // _depthStencilName is used to identify the depth stencil attachment in the render pipeline
+    protected _depthStencilName = `DepthStencil${this._renderWindowId}`;
 
     /**
      * @private
@@ -147,7 +202,7 @@ export class RenderWindow {
                 }
                 this._colorTextures.push(device.createTexture(textureInfo));
             }
-            if (info.renderPassInfo.depthStencilAttachment.format !== Format.UNKNOWN) {
+            if (info.renderPassInfo.depthStencilAttachment && info.renderPassInfo.depthStencilAttachment.format !== Format.UNKNOWN) {
                 this._depthStencilTexture = device.createTexture(new TextureInfo(
                     TextureType.TEX2D,
                     TextureUsageBit.DEPTH_STENCIL_ATTACHMENT | TextureUsageBit.SAMPLED,
@@ -221,9 +276,12 @@ export class RenderWindow {
             ));
         }
 
-        for (const camera of this._cameras) {
+        this._cameras.forEach((camera) => {
             camera.resize(width, height);
-        }
+        });
+
+        // This resize should only be handled by the render pipeline
+        this._isResized = true;
     }
 
     /**
@@ -255,6 +313,11 @@ export class RenderWindow {
         }
         this._cameras.push(camera);
         this.sortCameras();
+
+        // This resize should only be handled by the render pipeline
+        // If the camera is attached to the render window,
+        // resize handler should be called to update render window resouces
+        this._isResized = true;
     }
 
     /**

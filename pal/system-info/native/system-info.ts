@@ -22,7 +22,7 @@
  THE SOFTWARE.
 */
 
-import { OPEN_HARMONY } from 'internal:constants';
+import { OPEN_HARMONY, IOS } from 'internal:constants';
 import { EventTarget } from '../../../cocos/core/event';
 import { checkPalIntegrity, withImpl } from '../../integrity-check';
 import { BrowserType, NetworkType, OS, Platform, Language, Feature } from '../enum-type';
@@ -61,21 +61,21 @@ const platformMap: Record<number, Platform> = {
 };
 
 class SystemInfo extends EventTarget {
-    public readonly isNative: boolean;
-    public readonly isBrowser: boolean;
-    public readonly isMobile: boolean;
-    public readonly isLittleEndian: boolean;
-    public readonly platform: Platform;
-    public readonly language: Language;
-    public readonly nativeLanguage: string;
-    public readonly os: OS;
-    public readonly osVersion: string;
-    public readonly osMainVersion: number;
-    public readonly browserType: BrowserType;
-    public readonly browserVersion: string;
-    public readonly isXR: boolean;
-    private _featureMap: IFeatureMap;
-    private _initPromise: Promise<void>[];
+    public declare readonly isNative: boolean;
+    public declare readonly isBrowser: boolean;
+    public declare readonly isMobile: boolean;
+    public declare readonly isLittleEndian: boolean;
+    public declare readonly platform: Platform;
+    public declare readonly language: Language;
+    public declare readonly nativeLanguage: string;
+    public declare readonly os: OS;
+    public declare readonly osVersion: string;
+    public declare readonly osMainVersion: number;
+    public declare readonly browserType: BrowserType;
+    public declare readonly browserVersion: string;
+    public declare readonly isXR: boolean;
+    private declare _featureMap: IFeatureMap;
+    private _initPromise: Promise<void>[] = [];
     // TODO: need to wrap the function __isObjectValid()
 
     public get networkType (): NetworkType {
@@ -115,6 +115,7 @@ class SystemInfo extends EventTarget {
         this.isXR = (typeof xr !== 'undefined' && typeof xr.XrEntry !== 'undefined');
 
         const isHPE: boolean = typeof __supportHPE === 'function' ? __supportHPE() : false;
+        const isHarmonyOSNext = this.platform === Platform.OPENHARMONY;
 
         this._featureMap = {
             [Feature.WEBP]: true,
@@ -126,17 +127,16 @@ class SystemInfo extends EventTarget {
 
             [Feature.INPUT_TOUCH]: this.isMobile,
             [Feature.EVENT_KEYBOARD]: true,
-            [Feature.EVENT_MOUSE]: isHPE || !this.isMobile,
+            [Feature.EVENT_MOUSE]: isHPE || !this.isMobile || isHarmonyOSNext,
             [Feature.EVENT_TOUCH]: true,
             [Feature.EVENT_ACCELEROMETER]: this.isMobile,
             [Feature.EVENT_GAMEPAD]: true,
             [Feature.EVENT_HANDLE]: this.isXR,
             [Feature.EVENT_HMD]: this.isXR,
             [Feature.EVENT_HANDHELD]: (typeof xr !== 'undefined' && typeof xr.ARModule !== 'undefined'),
-            [Feature.WASM]: !OPEN_HARMONY,
+            // Although the iOS OS supports WASM, the engine does not yet support loading WASM on this platform.
+            [Feature.WASM]: !OPEN_HARMONY && !IOS,
         };
-
-        this._initPromise = [];
 
         this._registerEvent();
     }

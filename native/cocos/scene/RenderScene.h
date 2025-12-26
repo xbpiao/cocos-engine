@@ -29,6 +29,7 @@
 #include "base/RefCounted.h"
 #include "base/std/container/string.h"
 #include "base/std/container/vector.h"
+#include <cocos/scene/raytracing/RayTracing.h>
 
 namespace cc {
 

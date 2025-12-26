@@ -48,7 +48,7 @@ export type TweenEasing =
  * @zh
  * 缓动的可选属性的接口定义。
  */
-export interface ITweenOption {
+export interface ITweenOption<T extends object = any> {
 
     /**
      * @en
@@ -72,7 +72,7 @@ export interface ITweenOption {
      * @zh
      * 回调，当缓动动作启动时触发。
      */
-    onStart?: (target?: object) => void;
+    onStart?: (target?: T) => void;
 
     /**
      * @en
@@ -80,7 +80,7 @@ export interface ITweenOption {
      * @zh
      * 回调，当缓动动作更新时触发。
      */
-    onUpdate?: (target?: object, ratio?: number) => void;
+    onUpdate?: (target?: T, ratio?: number) => void;
 
     /**
      * @en
@@ -88,5 +88,5 @@ export interface ITweenOption {
      * @zh
      * 回调，当缓动动作完成时触发。
      */
-    onComplete?: (target?: object) => void;
+    onComplete?: (target?: T) => void;
 }

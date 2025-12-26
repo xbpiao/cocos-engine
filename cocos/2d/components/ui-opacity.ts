@@ -25,9 +25,7 @@
 import { ccclass, disallowMultiple, editable, executeInEditMode, executionOrder, help, menu, serializable, tooltip } from 'cc.decorator';
 import { EDITOR_NOT_IN_PREVIEW, JSB } from 'internal:constants';
 import { Component } from '../../scene-graph/component';
-import { misc } from '../../core';
-import { UIRenderer } from '../framework/ui-renderer';
-import { Node } from '../../scene-graph';
+import { clamp } from '../../core';
 
 /**
  * @en
@@ -45,6 +43,10 @@ import { Node } from '../../scene-graph';
 @executeInEditMode
 @disallowMultiple
 export class UIOpacity extends Component {
+    constructor () {
+        super();
+    }
+
     /**
      * @en
      * The transparency value of the impact.
@@ -62,11 +64,9 @@ export class UIOpacity extends Component {
         if (this._opacity === value) {
             return;
         }
-        value = misc.clampf(value, 0, 255);
+        value = clamp(value, 0, 255);
         this._opacity = value;
-        this.node._uiProps.localOpacity = value / 255;
-
-        this.setEntityLocalOpacityDirtyRecursively(true);
+        this._syncLocalOpacity(value / 255);
 
         if (EDITOR_NOT_IN_PREVIEW) {
             setTimeout(() => {
@@ -75,60 +75,18 @@ export class UIOpacity extends Component {
         }
     }
 
-    private setEntityLocalOpacityDirtyRecursively (dirty: boolean): void {
-        if (JSB) {
-            // const render = this.node._uiProps.uiComp as UIRenderer;
-            // if (render) {
-            //     render.setEntityOpacity(this.node._uiProps.localOpacity);
-            // }
-            // UIRenderer.setEntityColorDirtyRecursively(this.node, dirty);
-
-            UIOpacity.setEntityLocalOpacityDirtyRecursively(this.node, dirty, 1);
-        }
-    }
-
-    // for UIOpacity
-    public static setEntityLocalOpacityDirtyRecursively (node: Node, dirty: boolean, interruptParentOpacity: number): void {
-        if (!node.isValid) {
-            // Since children might be destroyed before the parent,
-            // we should add protecting condition when executing recursion downwards.
-            return;
-        }
-
-        const render = node._uiProps.uiComp as UIRenderer;
-        const uiOp = node.getComponent<UIOpacity>(UIOpacity);
-        let interruptOpacity = interruptParentOpacity;// if there is no UIOpacity component, it should always equal to 1.
-
-        if (render && render.color) { // exclude UIMeshRenderer which has not color
-            render.renderEntity.colorDirty = dirty;
-            if (uiOp) {
-                render.renderEntity.localOpacity = interruptOpacity * uiOp.opacity / 255;
-            } else {
-                // there is a just UIRenderer but no UIOpacity on the node, we should just transport the parentOpacity to the node.
-                render.renderEntity.localOpacity = interruptOpacity;
-            }
-            interruptOpacity = 1;
-        } else if (uiOp) {
-            // there is a just UIOpacity but no UIRenderer on the node.
-            // we should transport the interrupt opacity downward
-            interruptOpacity = interruptOpacity * uiOp.opacity / 255;
-        }
-
-        for (let i = 0; i < node.children.length; i++) {
-            UIOpacity.setEntityLocalOpacityDirtyRecursively(node.children[i], dirty || (interruptOpacity < 1), interruptOpacity);
-        }
-    }
-
     @serializable
     protected _opacity = 255;
 
     public onEnable (): void {
-        this.node._uiProps.localOpacity = this._opacity / 255;
-        this.setEntityLocalOpacityDirtyRecursively(true);
+        this._syncLocalOpacity(this._opacity / 255);
     }
 
     public onDisable (): void {
-        this.node._uiProps.localOpacity = 1;
-        this.setEntityLocalOpacityDirtyRecursively(true);
+        this._syncLocalOpacity(1);
+    }
+
+    private _syncLocalOpacity (localOpacity: number): void {
+        this.node._uiProps.localOpacity = localOpacity;
     }
 }

@@ -286,6 +286,9 @@ using namespace cc;
 %attribute(cc::scene::RenderWindow, cc::gfx::Framebuffer*, framebuffer, getFramebuffer);
 %attribute(cc::scene::RenderWindow, %arg(ccstd::vector<IntrusivePtr<Camera>> &), cameras, getCameras);
 %attribute(cc::scene::RenderWindow, cc::gfx::Swapchain*, swapchain, getSwapchain);
+%attribute(cc::scene::RenderWindow, uint32_t, renderWindowId, getRenderWindowId);
+%attribute(cc::scene::RenderWindow, ccstd::string &, colorName, getColorName);
+%attribute(cc::scene::RenderWindow, ccstd::string &, depthStencilName, getDepthStencilName);
 
 %attribute(cc::scene::Pass, cc::Root*, root, getRoot);
 %attribute(cc::scene::Pass, cc::gfx::Device*, device, getDevice);
@@ -321,6 +324,7 @@ using namespace cc;
 %attribute(cc::Node, uint32_t, flagChangedVersion, getFlagChangedVersion);
 %attribute(cc::Node, bool, _persistNode, isPersistNode, setPersistNode);
 %attribute(cc::Node, cc::MobilityMode, mobility, getMobility, setMobility);
+%attribute(cc::Node, bool, isSkipTransformUpdate, getIsSkipTransformUpdate, setIsSkipTransformUpdate);
 
 %attribute(cc::scene::Ambient, cc::Vec4&, skyColor, getSkyColor, setSkyColor);
 %attribute(cc::scene::Ambient, float, skyIllum, getSkyIllum, setSkyIllum);
@@ -387,6 +391,7 @@ using namespace cc;
 %attribute(cc::scene::SpotLight, float, shadowBias, getShadowBias, setShadowBias);
 %attribute(cc::scene::SpotLight, float, shadowNormalBias, getShadowNormalBias, setShadowNormalBias);
 %attribute(cc::scene::SpotLight, float, size, getSize, setSize);
+%attribute(cc::scene::SpotLight, float, angleAttenuationStrength, getAngleAttenuationStrength, setAngleAttenuationStrength);
 
 %attribute(cc::scene::SphereLight, cc::Vec3&, position, getPosition, setPosition);
 %attribute(cc::scene::SphereLight, float, size, getSize, setSize);
@@ -448,6 +453,7 @@ using namespace cc;
 %attribute(cc::scene::Camera, cc::scene::CameraUsage, cameraUsage, getCameraUsage, setCameraUsage);
 %attribute(cc::scene::Camera, cc::scene::TrackingType, trackingType, getTrackingType, setTrackingType);
 %attribute(cc::scene::Camera, cc::scene::CameraType, cameraType, getCameraType, setCameraType);
+%attribute(cc::scene::Camera, uint32_t, cameraId, getCameraId);
 
 %attribute(cc::scene::RenderScene, ccstd::string&, name, getName);
 %attribute(cc::scene::RenderScene, ccstd::vector<cc::IntrusivePtr<cc::scene::Camera>>&, cameras, getCameras);

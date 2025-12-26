@@ -22,6 +22,7 @@
  THE SOFTWARE.
 ****************************************************************************/
 
+#include "cocos/renderer/pipeline/Define.h"
 #include "cocos/renderer/pipeline/PipelineSceneData.h"
 #include "cocos/renderer/pipeline/PipelineStateManager.h"
 #include "cocos/renderer/pipeline/custom/LayoutGraphTypes.h"
@@ -30,13 +31,18 @@
 #include "cocos/renderer/pipeline/custom/NativePipelineTypes.h"
 #include "cocos/renderer/pipeline/custom/NativeRenderGraphUtils.h"
 #include "cocos/renderer/pipeline/custom/RenderGraphGraphs.h"
+#include "cocos/renderer/pipeline/custom/RenderInterfaceTypes.h"
 #include "cocos/renderer/pipeline/custom/RenderingModule.h"
 #include "cocos/renderer/pipeline/custom/details/GslUtils.h"
+#include "cocos/renderer/pipeline/custom/details/Range.h"
 #include "cocos/scene/ReflectionProbe.h"
 #include "cocos/scene/ReflectionProbeManager.h"
 #include "cocos/scene/RenderScene.h"
 #include "cocos/scene/RenderWindow.h"
-#include "pipeline/custom/RenderInterfaceTypes.h"
+#include "cocos/scene/SpotLight.h"
+#include "cocos/scene/DirectionalLight.h"
+#include "bindings/jswrapper/SeApi.h" // IWYU pragma: keep
+#include "cocos/renderer/pipeline/custom/NativeUtils.h"
 
 #if CC_USE_DEBUG_RENDERER
     #include "profiler/DebugRenderer.h"
@@ -46,14 +52,16 @@ namespace cc {
 
 namespace render {
 
+namespace {
+
 template <gfx::Format>
 void addSubresourceNode(ResourceGraph::vertex_descriptor v, const ccstd::string &name, ResourceGraph &resg);
 
 template <>
 void addSubresourceNode<gfx::Format::DEPTH_STENCIL>(ResourceGraph::vertex_descriptor v, const ccstd::string &name, ResourceGraph &resg) {
-    const auto &desc = get(ResourceGraph::DescTag{}, resg, v);
-    const auto &traits = get(ResourceGraph::TraitsTag{}, resg, v);
-    const auto &samplerInfo = get(ResourceGraph::SamplerTag{}, resg, v);
+    const auto desc = get(ResourceGraph::DescTag{}, resg, v);
+    const auto traits = get(ResourceGraph::TraitsTag{}, resg, v);
+    const auto samplerInfo = get(ResourceGraph::SamplerTag{}, resg, v);
 
     SubresourceView view{
         nullptr,
@@ -96,6 +104,8 @@ void addSubresourceNode<gfx::Format::DEPTH_STENCIL>(ResourceGraph::vertex_descri
         v);
 }
 
+} // namespace
+
 NativePipeline::NativePipeline(const allocator_type &alloc) noexcept
 : device(gfx::Device::getInstance()),
   globalDSManager(std::make_unique<pipeline::GlobalDSManager>()),
@@ -129,11 +139,25 @@ void NativePipeline::beginSetup() {
 void NativePipeline::endSetup() {
 }
 
+bool NativePipeline::getEnableCpuLightCulling() const {
+    return nativeContext.sceneCulling.enableLightCulling;
+}
+
+void NativePipeline::setEnableCpuLightCulling(bool enable) {
+    nativeContext.sceneCulling.enableLightCulling = enable;
+}
+
 bool NativePipeline::containsResource(const ccstd::string &name) const {
     return contains(name.c_str(), resourceGraph);
 }
 
 uint32_t NativePipeline::addExternalTexture(const ccstd::string &name, gfx::Texture *texture, ResourceFlags flags) {
+    auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
+    if (resID != ResourceGraph::null_vertex()) {
+        updateExternalTexture(name, texture);
+        return resID;
+    }
+
     const auto &texInfo = texture->getInfo();
     ResourceDesc desc{};
     desc.dimension = getResourceDimension(texInfo.type);
@@ -174,8 +198,170 @@ void NativePipeline::updateExternalTexture(const ccstd::string &name, gfx::Textu
         [](const auto & /*res*/) {});
 }
 
+namespace {
+
+void updateDepthStencilImpl(
+    NativePipeline &ppl,
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    ResourceGraph::vertex_descriptor resID, uint32_t width, uint32_t height, gfx::Format format,
+    gfx::Swapchain *swapchain) {
+    CC_EXPECTS(resID != ResourceGraph::null_vertex());
+    auto &desc = get(ResourceGraph::DescTag{}, ppl.resourceGraph, resID);
+
+    // update format
+    if (format == gfx::Format::UNKNOWN) {
+        if (swapchain && ppl.defaultFramebufferHasDepthStencil) {
+            format = swapchain->getDepthStencilTexture()->getFormat();
+        } else {
+            format = desc.format;
+        }
+    }
+    CC_ENSURES(format != gfx::Format::UNKNOWN);
+
+    visitObject(
+        resID, ppl.resourceGraph,
+        [&](ManagedTexture &tex) {
+            CC_EXPECTS(!swapchain || !ppl.defaultFramebufferHasDepthStencil);
+            bool invalidated =
+                std::forward_as_tuple(desc.width, desc.height, desc.format) !=
+                std::forward_as_tuple(width, height, format);
+            if (invalidated) {
+                for (const auto &e : makeRange(children(resID, ppl.resourceGraph))) {
+                    const auto childID = child(e, ppl.resourceGraph);
+                    auto &desc = get(ResourceGraph::DescTag{}, ppl.resourceGraph, childID);
+                    desc.width = width;
+                    desc.height = height;
+                    desc.format = format;
+                }
+                desc.width = width;
+                desc.height = height;
+                desc.format = format;
+                ppl.resourceGraph.invalidatePersistentRenderPassAndFramebuffer(tex.texture.get());
+            }
+        },
+        [&](RenderSwapchain &sc) {
+            CC_EXPECTS(ppl.defaultFramebufferHasDepthStencil);
+            CC_EXPECTS(swapchain);
+            CC_EXPECTS(swapchain->getWidth() == width && swapchain->getHeight() == height);
+            CC_EXPECTS(swapchain->getDepthStencilTexture()->getFormat() == format);
+            CC_EXPECTS(sc.isDepthStencil);
+            bool invalidated =
+                std::forward_as_tuple(desc.width, desc.height, desc.format) !=
+                    std::forward_as_tuple(width, height, format) ||
+                sc.swapchain != swapchain ||
+                sc.generation != swapchain->getGeneration();
+            if (invalidated) {
+                desc.width = width;
+                desc.height = height;
+                desc.format = format;
+                sc.swapchain = swapchain;
+                sc.generation = swapchain->getGeneration();
+                ppl.resourceGraph.invalidatePersistentRenderPassAndFramebuffer(
+                    sc.swapchain->getDepthStencilTexture());
+            }
+        },
+        [](const auto & /*res*/) {});
+}
+
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-uint32_t NativePipeline::addRenderWindow(const ccstd::string &name, gfx::Format format, uint32_t width, uint32_t height, scene::RenderWindow *renderWindow) {
+uint32_t addDepthStencilImpl(
+    NativePipeline &ppl,
+    const ccstd::string &name, gfx::Format format, uint32_t width, uint32_t height,
+    ResourceResidency residency,
+    gfx::Swapchain *swapchain) {
+    auto resID = findVertex(ccstd::pmr::string(name, ppl.get_allocator()), ppl.resourceGraph);
+
+    // Resource already exists
+    if (resID != ResourceGraph::null_vertex()) {
+        updateDepthStencilImpl(ppl, resID, width, height, format, swapchain);
+        return resID;
+    }
+
+    ResourceDesc desc{};
+    desc.dimension = ResourceDimension::TEXTURE2D;
+    desc.width = width;
+    desc.height = height;
+    desc.depthOrArraySize = 1;
+    desc.mipLevels = 1;
+    desc.format = format;
+    desc.sampleCount = gfx::SampleCount::X1;
+    desc.textureFlags = gfx::TextureFlagBit::MUTABLE_VIEW_FORMAT;
+    desc.flags = ResourceFlags::DEPTH_STENCIL_ATTACHMENT | ResourceFlags::INPUT_ATTACHMENT | ResourceFlags::SAMPLED |
+                 ResourceFlags::TRANSFER_SRC | ResourceFlags::TRANSFER_DST;
+
+    gfx::SamplerInfo samplerInfo{};
+    samplerInfo.magFilter = gfx::Filter::POINT;
+    samplerInfo.minFilter = gfx::Filter::POINT;
+    samplerInfo.mipFilter = gfx::Filter::NONE;
+
+    if (swapchain) {
+        CC_EXPECTS(residency == ResourceResidency::BACKBUFFER);
+        CC_EXPECTS(ppl.defaultFramebufferHasDepthStencil);
+        RenderSwapchain sc{swapchain, true};
+        sc.texture = RenderSwapchain::getDepthStencilTexture(swapchain);
+        resID = addVertex(
+            SwapchainTag{},
+            std::forward_as_tuple(name.c_str()),
+            std::forward_as_tuple(desc),
+            std::forward_as_tuple(ResourceTraits{residency}),
+            std::forward_as_tuple(),
+            std::forward_as_tuple(samplerInfo),
+            std::forward_as_tuple(sc),
+            ppl.resourceGraph);
+    } else {
+        CC_EXPECTS(residency == ResourceResidency::MANAGED || residency == ResourceResidency::MEMORYLESS);
+        resID = addVertex(
+            ManagedTextureTag{},
+            std::forward_as_tuple(name.c_str()),
+            std::forward_as_tuple(desc),
+            std::forward_as_tuple(ResourceTraits{residency}),
+            std::forward_as_tuple(),
+            std::forward_as_tuple(samplerInfo),
+            std::forward_as_tuple(),
+            ppl.resourceGraph);
+    }
+
+    addSubresourceNode<gfx::Format::DEPTH_STENCIL>(resID, name, ppl.resourceGraph);
+
+    return resID;
+}
+
+void tryAddRenderWindowDepthStencil(
+    NativePipeline &ppl,
+    const ccstd::string &depthStencilName,
+    uint32_t width, uint32_t height,
+    gfx::Swapchain *swapchain) {
+    if (depthStencilName.empty()) {
+        return;
+    }
+    if (swapchain && ppl.defaultFramebufferHasDepthStencil) {
+        const auto *texDS = swapchain->getDepthStencilTexture();
+        CC_EXPECTS(texDS);
+        addDepthStencilImpl(
+            ppl, depthStencilName, texDS->getFormat(),
+            width, height, ResourceResidency::BACKBUFFER,
+            swapchain);
+    } else {
+        addDepthStencilImpl(
+            ppl, depthStencilName, gfx::Format::DEPTH_STENCIL,
+            width, height, ResourceResidency::MANAGED,
+            nullptr);
+    }
+}
+
+} // namespace
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+uint32_t NativePipeline::addRenderWindow(
+    const ccstd::string &name,
+    gfx::Format format, uint32_t width, uint32_t height,
+    scene::RenderWindow *renderWindow, const ccstd::string &depthStencilName) {
+    auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
+    if (resID != ResourceGraph::null_vertex()) {
+        updateRenderWindow(name, renderWindow, depthStencilName);
+        return resID;
+    }
+
     ResourceDesc desc{};
     desc.dimension = ResourceDimension::TEXTURE2D;
     desc.width = width;
@@ -190,12 +376,22 @@ uint32_t NativePipeline::addRenderWindow(const ccstd::string &name, gfx::Format 
 
     CC_EXPECTS(renderWindow);
 
+    tryAddRenderWindowDepthStencil(*this, depthStencilName, width, height, renderWindow->getSwapchain());
+
+    // Render Texture
     if (!renderWindow->getSwapchain()) {
         CC_ASSERT(renderWindow->getFramebuffer()->getColorTextures().size() == 1);
         CC_ASSERT(renderWindow->getFramebuffer()->getColorTextures().at(0));
+        desc.format = renderWindow->getFramebuffer()->getColorTextures()[0]->getFormat();
         desc.sampleCount = renderWindow->getFramebuffer()->getColorTextures().at(0)->getInfo().samples;
         RenderSwapchain sc{};
         sc.renderWindow = renderWindow;
+        CC_ENSURES(!sc.isDepthStencil);
+
+        sc.texture = RenderSwapchain::getColorTexture(renderWindow);
+        CC_ENSURES(sc.texture);
+
+        CC_ENSURES(desc.format != gfx::Format::UNKNOWN);
         return addVertex(
             SwapchainTag{},
             std::forward_as_tuple(name.c_str()),
@@ -211,6 +407,11 @@ uint32_t NativePipeline::addRenderWindow(const ccstd::string &name, gfx::Format 
     CC_ASSERT(renderWindow->getFramebuffer()->getColorTextures().at(0));
 
     desc.format = renderWindow->getFramebuffer()->getColorTextures()[0]->getFormat();
+    CC_ENSURES(desc.format != gfx::Format::UNKNOWN);
+
+    RenderSwapchain sc{renderWindow->getSwapchain(), false};
+    sc.texture = RenderSwapchain::getColorTexture(renderWindow->getSwapchain());
+    CC_ENSURES(sc.texture);
 
     return addVertex(
         SwapchainTag{},
@@ -219,12 +420,17 @@ uint32_t NativePipeline::addRenderWindow(const ccstd::string &name, gfx::Format 
         std::forward_as_tuple(ResourceTraits{ResourceResidency::BACKBUFFER}),
         std::forward_as_tuple(),
         std::forward_as_tuple(),
-        std::forward_as_tuple(RenderSwapchain{renderWindow->getSwapchain()}),
+        std::forward_as_tuple(sc),
         resourceGraph);
 }
 
 // NOLINTNEXTLINE
 uint32_t NativePipeline::addStorageBuffer(const ccstd::string &name, gfx::Format format, uint32_t size, ResourceResidency residency) {
+    auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
+    if (resID != ResourceGraph::null_vertex()) {
+        updateStorageBuffer(name, size, format);
+        return resID;
+    }
     ResourceDesc desc{};
     desc.dimension = ResourceDimension::BUFFER;
     desc.width = size;
@@ -249,6 +455,11 @@ uint32_t NativePipeline::addStorageBuffer(const ccstd::string &name, gfx::Format
 
 // NOLINTNEXTLINE
 uint32_t NativePipeline::addRenderTarget(const ccstd::string &name, gfx::Format format, uint32_t width, uint32_t height, ResourceResidency residency) {
+    auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
+    if (resID != ResourceGraph::null_vertex()) {
+        updateRenderTarget(name, width, height, format);
+        return resID;
+    }
     ResourceDesc desc{};
     desc.dimension = ResourceDimension::TEXTURE2D;
     desc.width = width;
@@ -272,42 +483,17 @@ uint32_t NativePipeline::addRenderTarget(const ccstd::string &name, gfx::Format 
         resourceGraph);
 }
 
-// NOLINTNEXTLINE
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 uint32_t NativePipeline::addDepthStencil(const ccstd::string &name, gfx::Format format, uint32_t width, uint32_t height, ResourceResidency residency) {
-    ResourceDesc desc{};
-    desc.dimension = ResourceDimension::TEXTURE2D;
-    desc.width = width;
-    desc.height = height;
-    desc.depthOrArraySize = 1;
-    desc.mipLevels = 1;
-    desc.format = format;
-    desc.sampleCount = gfx::SampleCount::X1;
-    desc.textureFlags = gfx::TextureFlagBit::NONE;
-    desc.flags = ResourceFlags::DEPTH_STENCIL_ATTACHMENT | ResourceFlags::INPUT_ATTACHMENT | ResourceFlags::SAMPLED |
-                 ResourceFlags::TRANSFER_SRC | ResourceFlags::TRANSFER_DST;
-
-    CC_EXPECTS(residency == ResourceResidency::MANAGED || residency == ResourceResidency::MEMORYLESS);
-
-    gfx::SamplerInfo samplerInfo{};
-    samplerInfo.magFilter = gfx::Filter::POINT;
-    samplerInfo.minFilter = gfx::Filter::POINT;
-    samplerInfo.mipFilter = gfx::Filter::NONE;
-
-    auto resID = addVertex(
-        ManagedTextureTag{},
-        std::forward_as_tuple(name.c_str()),
-        std::forward_as_tuple(desc),
-        std::forward_as_tuple(ResourceTraits{residency}),
-        std::forward_as_tuple(),
-        std::forward_as_tuple(samplerInfo),
-        std::forward_as_tuple(),
-        resourceGraph);
-
-    addSubresourceNode<gfx::Format::DEPTH_STENCIL>(resID, name, resourceGraph);
-    return resID;
+    return addDepthStencilImpl(*this, name, format, width, height, residency, nullptr);
 }
 
 uint32_t NativePipeline::addTexture(const ccstd::string &name, gfx::TextureType type, gfx::Format format, uint32_t width, uint32_t height, uint32_t depth, uint32_t arraySize, uint32_t mipLevels, gfx::SampleCount sampleCount, ResourceFlags flags, ResourceResidency residency) {
+    auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
+    if (resID != ResourceGraph::null_vertex()) {
+        updateTexture(name, format, width, height, depth, arraySize, mipLevels, sampleCount);
+        return resID;
+    }
     const auto dimension = getResourceDimension(type);
     ResourceDesc desc{
         dimension,
@@ -338,6 +524,11 @@ void NativePipeline::updateTexture(const ccstd::string &name, gfx::Format format
 }
 
 uint32_t NativePipeline::addBuffer(const ccstd::string &name, uint32_t size, ResourceFlags flags, ResourceResidency residency) {
+    auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
+    if (resID != ResourceGraph::null_vertex()) {
+        updateBuffer(name, size);
+        return resID;
+    }
     ResourceDesc desc = {};
     desc.dimension = ResourceDimension::BUFFER;
     desc.width = size;
@@ -362,7 +553,19 @@ uint32_t NativePipeline::addResource(
     gfx::Format format,
     uint32_t width, uint32_t height, uint32_t depth, uint32_t arraySize, uint32_t mipLevels,
     gfx::SampleCount sampleCount, ResourceFlags flags, ResourceResidency residency) {
-    return dimension == ResourceDimension::BUFFER ? addBuffer(name, width, flags, residency) : addTexture(name, getTextureType(dimension, arraySize), format, width, height, depth, arraySize, mipLevels, sampleCount, flags, residency);
+    auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
+    if (resID != ResourceGraph::null_vertex()) {
+        updateResource(name, format, width, height, depth, arraySize, mipLevels, sampleCount);
+        return resID;
+    }
+    return dimension == ResourceDimension::BUFFER
+               ? addBuffer(name, width, flags, residency)
+               : addTexture(
+                     name,
+                     getTextureType(dimension, arraySize),
+                     format, width, height, depth,
+                     arraySize, mipLevels, sampleCount,
+                     flags, residency);
 }
 
 void NativePipeline::updateResource(
@@ -405,6 +608,11 @@ void NativePipeline::updateResource(
 
 // NOLINTNEXTLINE
 uint32_t NativePipeline::addStorageTexture(const ccstd::string &name, gfx::Format format, uint32_t width, uint32_t height, ResourceResidency residency) {
+    auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
+    if (resID != ResourceGraph::null_vertex()) {
+        updateStorageTexture(name, width, height, format);
+        return resID;
+    }
     ResourceDesc desc{};
     desc.dimension = ResourceDimension::TEXTURE2D;
     desc.width = width;
@@ -434,6 +642,11 @@ uint32_t NativePipeline::addStorageTexture(const ccstd::string &name, gfx::Forma
 }
 // NOLINTNEXTLINE
 uint32_t NativePipeline::addShadingRateTexture(const ccstd::string &name, uint32_t width, uint32_t height, ResourceResidency residency) {
+    auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
+    if (resID != ResourceGraph::null_vertex()) {
+        updateShadingRateTexture(name, width, height);
+        return resID;
+    }
     ResourceDesc desc{};
     desc.dimension = ResourceDimension::TEXTURE2D;
     desc.width = width;
@@ -468,6 +681,11 @@ uint32_t NativePipeline::addCustomBuffer(
     if (!custom.currentContext) {
         return ResourceGraph::null_vertex();
     }
+    auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
+    if (resID != ResourceGraph::null_vertex()) {
+        updateBuffer(name, info.size);
+        return resID;
+    }
     auto &ctx = *custom.currentContext;
 
     ResourceDesc desc{};
@@ -500,6 +718,13 @@ uint32_t NativePipeline::addCustomTexture(
     if (!custom.currentContext) {
         return ResourceGraph::null_vertex();
     }
+    auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
+    if (resID != ResourceGraph::null_vertex()) {
+        updateTexture(name,
+                      info.format, info.width, info.height, info.depth,
+                      info.layerCount, info.levelCount, info.samples);
+        return resID;
+    }
     auto &ctx = *custom.currentContext;
 
     ResourceDesc desc{};
@@ -526,29 +751,33 @@ uint32_t NativePipeline::addCustomTexture(
         resourceGraph);
 }
 
-void NativePipeline::updateRenderWindow(const ccstd::string &name, scene::RenderWindow *renderWindow) {
+void NativePipeline::updateRenderWindow(
+    const ccstd::string &name, scene::RenderWindow *renderWindow,
+    const ccstd::string &depthStencilName) {
     auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
     if (resID == ResourceGraph::null_vertex()) {
         return;
     }
-    auto &desc = get(ResourceGraph::DescTag{}, resourceGraph, resID);
+    uint32_t width = 0;
+    uint32_t height = 0;
     visitObject(
         resID, resourceGraph,
         [&](IntrusivePtr<gfx::Framebuffer> &fb) {
             // deprecated
             CC_EXPECTS(false);
             CC_EXPECTS(!renderWindow->getSwapchain());
-            desc.width = renderWindow->getWidth();
-            desc.height = renderWindow->getHeight();
+            width = renderWindow->getWidth();
+            height = renderWindow->getHeight();
             fb = renderWindow->getFramebuffer();
         },
         [&](RenderSwapchain &sc) {
+            CC_EXPECTS(!sc.isDepthStencil);
             auto *newSwapchain = renderWindow->getSwapchain();
-            const auto& oldTexture = resourceGraph.getTexture(resID);
+            const auto &oldTexture = resourceGraph.getTexture(resID);
             resourceGraph.invalidatePersistentRenderPassAndFramebuffer(oldTexture);
             if (newSwapchain) {
-                desc.width = newSwapchain->getWidth();
-                desc.height = newSwapchain->getHeight();
+                width = newSwapchain->getWidth();
+                height = newSwapchain->getHeight();
 
                 sc.renderWindow = nullptr;
                 sc.swapchain = renderWindow->getSwapchain();
@@ -558,9 +787,9 @@ void NativePipeline::updateRenderWindow(const ccstd::string &name, scene::Render
                 CC_EXPECTS(renderWindow->getFramebuffer()->getColorTextures().size() == 1);
                 CC_EXPECTS(renderWindow->getFramebuffer()->getColorTextures().front());
 
-                const auto& texture = renderWindow->getFramebuffer()->getColorTextures().front();
-                desc.width = texture->getWidth();
-                desc.height = texture->getHeight();
+                const auto &texture = renderWindow->getFramebuffer()->getColorTextures().front();
+                width = texture->getWidth();
+                height = texture->getHeight();
 
                 sc.renderWindow = renderWindow;
                 sc.swapchain = nullptr;
@@ -568,6 +797,21 @@ void NativePipeline::updateRenderWindow(const ccstd::string &name, scene::Render
             }
         },
         [](const auto & /*res*/) {});
+
+    CC_ENSURES(width);
+    CC_ENSURES(height);
+
+    {
+        auto &desc = get(ResourceGraph::DescTag{}, resourceGraph, resID);
+        desc.width = width;
+        desc.height = height;
+    }
+
+    // Associated depth stencil
+    tryAddRenderWindowDepthStencil(
+        *this, depthStencilName,
+        width, height,
+        renderWindow->getSwapchain());
 }
 
 void NativePipeline::updateStorageBuffer(
@@ -619,6 +863,13 @@ void NativePipeline::updateRenderTarget(
                 std::forward_as_tuple(desc.width, desc.height, desc.format) !=
                 std::forward_as_tuple(width, height, format);
             if (invalidate) {
+                for (const auto &e : makeRange(children(resID, resourceGraph))) {
+                    const auto childID = child(e, resourceGraph);
+                    auto &desc = get(ResourceGraph::DescTag{}, resourceGraph, childID);
+                    desc.width = width;
+                    desc.height = height;
+                    desc.format = format;
+                }
                 desc.width = width;
                 desc.height = height;
                 desc.format = format;
@@ -631,7 +882,11 @@ void NativePipeline::updateRenderTarget(
 void NativePipeline::updateDepthStencil(
     const ccstd::string &name,
     uint32_t width, uint32_t height, gfx::Format format) { // NOLINT(bugprone-easily-swappable-parameters)
-    updateRenderTarget(name, width, height, format);
+    auto resID = findVertex(ccstd::pmr::string(name, get_allocator()), resourceGraph);
+    if (resID == ResourceGraph::null_vertex()) {
+        return;
+    }
+    updateDepthStencilImpl(*this, resID, width, height, format, nullptr);
 }
 
 void NativePipeline::updateStorageTexture(
@@ -748,10 +1003,10 @@ void buildReflectionProbePass(
     const std::string probePassRTName = "reflectionProbePassColor" + cameraName;
     const std::string probePassDSName = "reflectionProbePassDS" + cameraName;
     if (!pipeline->containsResource(probePassRTName)) {
-        pipeline->addRenderWindow(probePassRTName, gfx::Format::RGBA8, width, height, renderWindow);
+        pipeline->addRenderWindow(probePassRTName, gfx::Format::RGBA8, width, height, renderWindow, "");
         pipeline->addDepthStencil(probePassDSName, gfx::Format::DEPTH_STENCIL, width, height, ResourceResidency::EXTERNAL);
     }
-    pipeline->updateRenderWindow(probePassRTName, renderWindow);
+    pipeline->updateRenderWindow(probePassRTName, renderWindow, "");
     pipeline->updateDepthStencil(probePassDSName, width, height, gfx::Format::DEPTH_STENCIL);
     std::unique_ptr<RenderPassBuilder> passBuilder(pipeline->addRenderPass(width, height, "default"));
     passBuilder->setName("ReflectionProbePass" + std::to_string(faceIdx));
@@ -979,96 +1234,6 @@ void setupGpuDrivenResources(
 
 } // namespace
 
-void NativePipeline::addBuiltinGpuCullingPass(
-    const scene::Camera *camera, const std::string &hzbName, const scene::Light *light) {
-    std::ignore = camera;
-    const uint32_t cullingID = ++nativeContext.sceneCulling.gpuCullingPassID;
-    setupGpuDrivenResources(*this, cullingID, resourceGraph, hzbName);
-
-    if (light) {
-        // build light culling pass
-        return;
-    }
-
-    const std::string objectBuffer = "CCObjectBuffer" + std::to_string(cullingID);
-    const std::string instanceBuffer = "CCInstanceBuffer" + std::to_string(cullingID);
-    const std::string drawIndirectBuffer = "CCDrawIndirectBuffer" + std::to_string(cullingID);
-    const std::string drawInstanceBuffer = "CCDrawInstanceBuffer" + std::to_string(cullingID);
-    const std::string visibilityBuffer = "CCVisibilityBuffer" + std::to_string(cullingID);
-
-    // init indirected buffers
-    {
-        CopyPass copyPass{renderGraph.get_allocator()};
-        {
-            CopyPair copyPair{renderGraph.get_allocator()};
-            copyPair.source = "xxx";
-            copyPair.target = drawIndirectBuffer;
-            copyPair.mipLevels = 1;
-            copyPair.numSlices = 1;
-            copyPass.copyPairs.emplace_back(std::move(copyPair));
-        }
-
-        auto copyID = addVertex2(
-            CopyTag{},
-            std::forward_as_tuple("CopyInitialIndirectBuffer"),
-            std::forward_as_tuple(),
-            std::forward_as_tuple(),
-            std::forward_as_tuple(),
-            std::forward_as_tuple(std::move(copyPass)),
-            renderGraph);
-        CC_ENSURES(copyID != RenderGraph::null_vertex());
-    }
-    // run compute cullling pass
-    {
-        ComputePass computePass{renderGraph.get_allocator()};
-        {
-            auto res = computePass.computeViews.emplace(
-                std::piecewise_construct,
-                std::forward_as_tuple(drawIndirectBuffer),
-                std::forward_as_tuple());
-            auto &view = res.first->second.emplace_back();
-            view.name = "CCDrawIndirectBuffer";
-            view.accessType = AccessType::WRITE;
-            view.shaderStageFlags = gfx::ShaderStageFlagBit::COMPUTE;
-        }
-        {
-            auto res = computePass.computeViews.emplace(
-                std::piecewise_construct,
-                std::forward_as_tuple(drawInstanceBuffer),
-                std::forward_as_tuple());
-            auto &view = res.first->second.emplace_back();
-            view.name = "CCDrawInstanceBuffer";
-            view.accessType = AccessType::WRITE;
-            view.shaderStageFlags = gfx::ShaderStageFlagBit::COMPUTE;
-        }
-        {
-            auto res = computePass.computeViews.emplace(
-                std::piecewise_construct,
-                std::forward_as_tuple(visibilityBuffer),
-                std::forward_as_tuple());
-            auto &view = res.first->second.emplace_back();
-            view.name = "CCVisibilityBuffer";
-            view.accessType = AccessType::WRITE;
-            view.shaderStageFlags = gfx::ShaderStageFlagBit::COMPUTE;
-        }
-
-        auto computePassID = addVertex2(
-            ComputeTag{},
-            std::forward_as_tuple("Scene"),
-            std::forward_as_tuple(),
-            std::forward_as_tuple(),
-            std::forward_as_tuple(),
-            std::forward_as_tuple(std::move(computePass)),
-            renderGraph);
-        CC_ENSURES(computePassID != RenderGraph::null_vertex());
-    }
-}
-
-void NativePipeline::addBuiltinHzbGenerationPass(
-    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-    const std::string &sourceDepthStencilName, const std::string &targetHzbName) {
-}
-
 void NativePipeline::addCopyPass(const ccstd::vector<CopyPair> &copyPairs) {
     CopyPass pass(renderGraph.get_allocator());
     pass.copyPairs.reserve(copyPairs.size());
@@ -1149,10 +1314,29 @@ void buildLayoutGraphNodeBuffer(
     }
 }
 
+se::Value buildRPVal;
+void buildRenderPipeline() {
+    if (buildRPVal.isUndefined()) {
+        auto *global = se::ScriptEngine::getInstance()->getGlobalObject();
+        se::Value jsbVal;
+        if(global->getProperty("jsb", &jsbVal) && jsbVal.isObject()) {
+            jsbVal.toObject()->getProperty("buildRenderPipeline", &buildRPVal);
+        }
+        se::ScriptEngine::getInstance()->addBeforeCleanupHook([]() {
+            buildRPVal.setUndefined();
+        });
+    }
+    se::ValueArray args;
+    buildRPVal.toObject()->call(args, nullptr);
+}
+
 } // namespace
 
 // NOLINTNEXTLINE
 bool NativePipeline::activate(gfx::Swapchain *swapchainIn) {
+    if (device->getGfxAPI() == gfx::API::GLES2 || device->getGfxAPI() == gfx::API::GLES3) {
+        defaultFramebufferHasDepthStencil = true;
+    }
     // setMacroInt("CC_PIPELINE_TYPE", 1);
 
     // disable gfx internal deduce
@@ -1189,8 +1373,9 @@ bool NativePipeline::activate(gfx::Swapchain *swapchainIn) {
     }
 
     setValue("CC_USE_HDR", getPipelineSceneData()->isHDR());
+
 #if ENABLE_FLOAT_OUTPUT
-    setValue("CC_USE_FLOAT_OUTPUT", true);
+    setValue("CC_USE_FLOAT_OUTPUT", pipeline::supportsRGBA16HalfFloatTexture(device));
 #else
     setValue("CC_USE_FLOAT_OUTPUT", false);
 #endif
@@ -1326,7 +1511,7 @@ void NativePipeline::render(const ccstd::vector<scene::Camera *> &cameras) {
     std::ignore = cameras;
     const auto *sceneData = pipelineSceneData.get();
     auto *commandBuffer = device->getCommandBuffer();
-
+    buildRenderPipeline();
     executeRenderGraph(renderGraph);
 }
 
@@ -1465,6 +1650,123 @@ void NativePipeline::setCustomContext(std::string_view name) {
     if (iter != custom.contexts.end()) {
         custom.currentContext = iter->second;
     }
+}
+
+void NativePipeline::setMat4(const ccstd::string &name, const Mat4 &mat) {
+    setMat4Impl(renderGraph.globalRenderData, programLibrary->layoutGraph, name, mat);
+}
+
+void NativePipeline::setQuaternion(const ccstd::string &name, const Quaternion &quat) {
+    setQuaternionImpl(renderGraph.globalRenderData, programLibrary->layoutGraph, name, quat);
+}
+
+void NativePipeline::setColor(const ccstd::string &name, const gfx::Color &color) {
+    setColorImpl(renderGraph.globalRenderData, programLibrary->layoutGraph, name, color);
+}
+
+void NativePipeline::setVec4(const ccstd::string &name, const Vec4 &vec) {
+    setVec4Impl(renderGraph.globalRenderData, programLibrary->layoutGraph, name, vec);
+}
+
+void NativePipeline::setVec2(const ccstd::string &name, const Vec2 &vec) {
+    setVec2Impl(renderGraph.globalRenderData, programLibrary->layoutGraph, name, vec);
+}
+
+void NativePipeline::setFloat(const ccstd::string &name, float v) {
+    setFloatImpl(renderGraph.globalRenderData, programLibrary->layoutGraph, name, v);
+}
+
+void NativePipeline::setArrayBuffer(const ccstd::string &name, const ArrayBuffer *arrayBuffer) {
+    setArrayBufferImpl(renderGraph.globalRenderData, programLibrary->layoutGraph, name, *arrayBuffer);
+}
+
+void NativePipeline::setBuffer(const ccstd::string &name, gfx::Buffer *buffer) {
+    setBufferImpl(renderGraph.globalRenderData, programLibrary->layoutGraph, name, buffer);
+}
+
+void NativePipeline::setTexture(const ccstd::string &name, gfx::Texture *texture) {
+    setTextureImpl(renderGraph.globalRenderData, programLibrary->layoutGraph, name, texture);
+}
+
+void NativePipeline::setSampler(const ccstd::string &name, gfx::Sampler *sampler) {
+    setSamplerImpl(renderGraph.globalRenderData, programLibrary->layoutGraph, name, sampler);
+}
+
+void NativePipeline::setBuiltinCameraConstants(const scene::Camera *camera) {
+    const auto* scene = camera->getScene();
+    setCameraUBOValues(
+        *camera,
+        programLibrary->layoutGraph,
+        *getPipelineSceneData(),
+        scene ? scene->getMainLight() : nullptr,
+        renderGraph.globalRenderData);
+}
+
+void NativePipeline::setBuiltinDirectionalLightConstants(const scene::DirectionalLight *light, const scene::Camera *camera) {
+    std::ignore = camera;
+    CC_EXPECTS(light);
+    auto *device = getDevice();
+    const auto &sceneData = *getPipelineSceneData();
+    auto &data = renderGraph.globalRenderData;
+    setShadowUBOView(*device, programLibrary->layoutGraph, sceneData, *light, data);
+}
+
+void NativePipeline::setBuiltinSphereLightConstants(const scene::SphereLight *light, const scene::Camera *camera) {
+    CC_EXPECTS(light);
+    const auto &sceneData = *getPipelineSceneData();
+    const auto &shadowInfo = *sceneData.getShadows();
+
+    auto &data = renderGraph.globalRenderData;
+    setPunctualLightShadowUBO(
+        getDevice(), programLibrary->layoutGraph, sceneData,
+        camera->getScene()->getMainLight(), *light, data);
+}
+
+void NativePipeline::setBuiltinSpotLightConstants(const scene::SpotLight *light, const scene::Camera *camera) {
+    CC_EXPECTS(light);
+    const auto &sceneData = *this->getPipelineSceneData();
+    const auto &shadowInfo = *sceneData.getShadows();
+
+    auto &data = renderGraph.globalRenderData;
+    setPunctualLightShadowUBO(
+        getDevice(), programLibrary->layoutGraph, sceneData,
+        camera->getScene()->getMainLight(), *light, data);
+}
+
+void NativePipeline::setBuiltinPointLightConstants(const scene::PointLight *light, const scene::Camera *camera) {
+    CC_EXPECTS(light);
+    const auto &sceneData = *this->getPipelineSceneData();
+    const auto &shadowInfo = *sceneData.getShadows();
+
+    auto &data = renderGraph.globalRenderData;
+    setPunctualLightShadowUBO(
+        getDevice(), programLibrary->layoutGraph, sceneData,
+        camera->getScene()->getMainLight(), *light, data);
+}
+
+void NativePipeline::setBuiltinRangedDirectionalLightConstants(const scene::RangedDirectionalLight *light, const scene::Camera *camera) {
+    // TODO(zhouzhenglong): implement
+}
+
+void NativePipeline::setBuiltinDirectionalLightFrustumConstants(const scene::Camera *camera, const scene::DirectionalLight *light, uint32_t csmLevel) {
+    CC_EXPECTS(light);
+    // if csm is actually activated, csm is not nullptr
+    // update and get csm
+    const auto *csm = getBuiltinShadowCSM(*this, *camera, light);
+
+    // set data
+    auto *device = getDevice();
+    const auto &sceneData = *getPipelineSceneData();
+    auto &data = renderGraph.globalRenderData;
+    setShadowUBOLightView(device, programLibrary->layoutGraph, sceneData, csm, *light, csmLevel, data);
+}
+
+void NativePipeline::setBuiltinSpotLightFrustumConstants(const scene::SpotLight *light) {
+    CC_EXPECTS(light);
+    auto *device = getDevice();
+    const auto &sceneData = *getPipelineSceneData();
+    auto &data = renderGraph.globalRenderData;
+    setShadowUBOLightView(device, programLibrary->layoutGraph, sceneData, nullptr, *light, 0, data);
 }
 
 } // namespace render

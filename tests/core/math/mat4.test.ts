@@ -17,13 +17,30 @@ describe('Test Mat4', () => {
         const t2 = new Vec3();
         const r2 = new Quat();
         const s2 = new Vec3();
-        Mat4.toRTS(mat4, r2, t2, s2);
+        Mat4.toSRT(mat4, r2, t2, s2);
         expect(Vec3.equals(t2, t)).toBe(true);
         expect(Vec3.equals(s2, s)).toBe(true);
         expect(Quat.equals(r2, r)).toBe(true);
         expect(Vec3.equals(mat4.getTranslation(new Vec3()), t)).toBe(true);
         expect(Vec3.equals(mat4.getScale(new Vec3()), s)).toBe(true);
         expect(Quat.equals(mat4.getRotation(new Quat()), r)).toBe(true);
+    });
+
+    test('toSRT: zero axis length', () => {
+        const m = new Mat4(
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 1, 0,
+            0.000002836869271050091, -64.9000015258789, 0, 1
+        );
+        
+        const q = new Quat();
+        const t = new Vec3();
+        const s = new Vec3();
+        Mat4.toSRT(m, q, t, s);
+        expect(Quat.equals(q, new Quat(0, 0, 0, 1))).toBe(true);
+        expect(Vec3.equals(t, new Vec3(0.000002836869271050091, -64.9000015258789, 0))).toBe(true);
+        expect(Vec3.equals(s, new Vec3(0, 0, 1))).toBe(true);
     });
 
     test('clone', () => {
@@ -613,5 +630,21 @@ describe('Test Mat4', () => {
         );
         const r = Mat4.multiplyScalarAndAdd(new Mat4(), b, a, 2);
         expect(Mat4.equals(r, res)).toBe(true);
+    });
+
+    test('toString', () => {
+        const m = new Mat4(
+12.1234, 0.002, 44.123433, 55.12234,
+6.1230835, 12384.126, 7348.12237, 283.23848943,
+1283.8, 0.000009, 0.012384294, 0.18492384,
+1284734.123, 0.12841203, 0, 0.00001283
+);
+        const expect0 = `[
+12.1234, 0.002, 44.123433, 55.12234,
+6.1230835, 12384.126, 7348.12237, 283.23848943,
+1283.8, 0.000009, 0.012384294, 0.18492384,
+1284734.123, 0.12841203, 0, 0.00001283
+]`;
+        expect(m.toString()).toBe(expect0);
     });
 });

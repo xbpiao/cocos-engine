@@ -47,7 +47,7 @@ export class StaticVBChunk {
     public get ib (): Readonly<Uint16Array> {
         return this._ib;
     }
-    private _ib: Uint16Array;
+    private declare _ib: Uint16Array;
 
     constructor (
         public vertexAccessor: StaticVBAccessor,
@@ -57,7 +57,9 @@ export class StaticVBChunk {
         public vb: Float32Array,
         public indexCount: number,
     ) {
-        this._ib = new Uint16Array(indexCount); // JSB
+        if (JSB) {
+            this._ib = new Uint16Array(indexCount); // JSB
+        }
         assertIsTrue(meshBuffer === vertexAccessor.getMeshBuffer(bufferId));
     }
 
@@ -159,8 +161,15 @@ export class StaticVBAccessor extends BufferAccessor {
 
     public allocateChunk (vertexCount: number, indexCount: number): StaticVBChunk | null {
         const byteLength = vertexCount * this.vertexFormatBytes;
-        let buf: MeshBuffer = null!; let freeList: IFreeEntry[];
-        let bid = 0; let eid = -1; let entry: IFreeEntry | null = null;
+        if (vertexCount > this._vCount || indexCount > this._iCount) {
+            errorID(9004, byteLength);
+            return null;
+        }
+        let buf: MeshBuffer = null!;
+        let freeList: IFreeEntry[];
+        let bid = 0;
+        let eid = -1;
+        let entry: IFreeEntry | null = null;
         // Loop buffers
         for (let i = 0; i < this._buffers.length; ++i) {
             buf = this._buffers[i];
@@ -181,7 +190,7 @@ export class StaticVBAccessor extends BufferAccessor {
         if (!entry) {
             bid = this._allocateBuffer();
             buf = this._buffers[bid];
-            if (buf && buf.checkCapacity(vertexCount, indexCount)) {
+            if (buf) {
                 eid = 0;
                 entry = this._freeLists[bid][eid];
             }
@@ -195,7 +204,6 @@ export class StaticVBAccessor extends BufferAccessor {
 
             return new StaticVBChunk(this, bid, buf, vertexOffset, vb, indexCount);
         } else {
-            errorID(9004, byteLength);
             return null;
         }
     }

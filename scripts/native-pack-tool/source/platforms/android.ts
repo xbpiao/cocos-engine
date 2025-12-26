@@ -21,6 +21,7 @@ export interface IAndroidParams {
     javaHome: string;
     javaPath: string;
     androidInstant: boolean,
+    isSoFileCompressed: boolean;
     maxAspectRatio: string;
     remoteUrl?: string;
     apiLevel: number;
@@ -47,16 +48,17 @@ export class AndroidPackTool extends NativePackTool {
         if (!fs.existsSync(this.paths.nativePrjDir)) {
             // 拷贝 lite 仓库的 templates/android/build 文件到构建输出目录
             await fs.copy(ps.join(this.paths.nativeTemplateDirInCocos, this.params.platform, 'build'), this.paths.nativePrjDir, { overwrite: false });
+            this.firstTimeBuild = true;
+        } else {
+            this.firstTimeBuild = false;
         }
         // 原生工程不重复拷贝 TODO 复用前需要做版本检测
         if (!fs.existsSync(this.paths.platformTemplateDirInPrj)) {
             // 拷贝 lite 仓库的 templates/android/template 文件到构建输出目录
             await fs.copy(ps.join(this.paths.nativeTemplateDirInCocos, this.params.platform, 'template'), this.paths.platformTemplateDirInPrj, { overwrite: false });
             this.writeEngineVersion();
-            this.firstTimeBuild = true;
         } else {
             this.validateNativeDir();
-            this.firstTimeBuild = false;
         }
     }
 
@@ -70,11 +72,11 @@ export class AndroidPackTool extends NativePackTool {
         await this.copyCommonTemplate();
         await this.copyPlatformTemplate();
         await this.generateCMakeConfig();
-        await this.excuteCocosTemplateTask();
+        await this.executeCocosTemplateTask();
 
         await this.updateAndroidGradleValues();
         await this.updateManifest();
-        await this.encrypteScripts();
+        await this.encryptScripts();
         await this.generateAppNameValues();
         return true;
     }
@@ -362,13 +364,22 @@ export class AndroidPackTool extends NativePackTool {
             content = content.replace(/COCOS_ENGINE_PATH=.*/, `COCOS_ENGINE_PATH=${cchelper.fixPath(Paths.nativeRoot)}`);
             content = content.replace(/APPLICATION_ID=.*/, `APPLICATION_ID=${options.packageName}`);
             content = content.replace(/NATIVE_DIR=.*/, `NATIVE_DIR=${cchelper.fixPath(this.paths.platformTemplateDirInPrj)}`);
+            content = content.replace(/PROP_ENABLE_COMPRESS_SO=.*/, `PROP_ENABLE_COMPRESS_SO=${options.isSoFileCompressed ? "true" : "false"}`);
 
+
+            const ndkPropertiesPath = cchelper.join(options.ndkPath, 'source.properties');
+            if (fs.existsSync(ndkPropertiesPath)) {
+                const ndkContent = fs.readFileSync(ndkPropertiesPath, 'utf-8');
+                const regexp = new RegExp(`Pkg.Revision = (.*)`);
+                const r = ndkContent.match(regexp);
+                if (r) {
+                    content = content.replace(/PROP_NDK_VERSION=.*/, `PROP_NDK_VERSION=${r[1]}`);
+                }
+            }
 
             if (process.platform === 'win32') {
                 options.ndkPath = options.ndkPath.replace(/\\/g, '\\\\');
             }
-
-            content = content.replace(/PROP_NDK_PATH=.*/, `PROP_NDK_PATH=${options.ndkPath}`);
 
             const abis = (options.appABIs && options.appABIs.length > 0) ? options.appABIs.join(':') : 'armeabi-v7a';
             // todo:新的template里面有个注释也是这个字段，所以要加个g
@@ -584,6 +595,21 @@ export class AndroidPackTool extends NativePackTool {
                 `${this.params.platformParams.packageName}/com.cocos.game.AppActivity`,
             ],
             false);
+        return true;
+    }
+
+    static async openWithIDE(projPath: string, ASDir: string) {
+        let ASFile = "./studio"
+        if (!ASDir || !fs.existsSync(ASDir)) {
+            throw new Error(`android studio's runnable file Dir not set or not exist`);
+        }
+        if (process.platform === 'win32') {
+            ASFile = "studio.bat"
+            projPath = projPath.replace(/\\/g, '/');
+            ASDir = ASDir.replace(/\\/g, '/');
+        }
+
+        cchelper.runCmd(ASFile, [projPath], false, ASDir);
         return true;
     }
 }

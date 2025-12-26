@@ -26,7 +26,7 @@ import { JSB } from 'internal:constants';
 import { RenderingSubMesh } from '../../asset/assets/rendering-sub-mesh';
 import { DRAW_INFO_SIZE, Buffer, Attribute, BufferInfo, DrawInfo,
     AttributeName, BufferUsageBit, Format, FormatInfos, MemoryUsageBit, PrimitiveMode } from '../../gfx';
-import { Vec3 } from '../../core';
+import { Color, Vec3 } from '../../core';
 import { scene } from '../../render-scene';
 import CurveRange from '../animator/curve-range';
 import GradientRange from '../animator/gradient-range';
@@ -37,7 +37,7 @@ const _vertex_attrs = [
     new Attribute(AttributeName.ATTR_TEX_COORD, Format.RGBA32F), // x:index y:size zw:texcoord
     new Attribute(AttributeName.ATTR_TEX_COORD1, Format.RGB32F), // xyz:velocity
     new Attribute(AttributeName.ATTR_COLOR, Format.RGBA8, true),
-];
+] as (Attribute & { offset: number })[];
 
 const _temp_v1 = new Vec3();
 const _temp_v2 = new Vec3();
@@ -73,7 +73,7 @@ export class LineModel extends scene.Model {
     public createBuffer (): void {
         this._vertSize = 0;
         for (const a of _vertex_attrs) {
-            (a as any).offset = this._vertSize;
+            a.offset = this._vertSize;
             this._vertSize += FormatInfos[a.format].size;
         }
         this._vertAttrsFloatCount = this._vertSize / 4; // number of float
@@ -145,7 +145,7 @@ export class LineModel extends scene.Model {
             this._vdataF32![offset++] = _temp_v1.x;
             this._vdataF32![offset++] = _temp_v1.y;
             this._vdataF32![offset++] = _temp_v1.z;
-            this._vdataUint32![offset++] = color.evaluate(0, 1)._val;
+            this._vdataUint32![offset++] = Color.toUint32(color.evaluate(0, 1));
             this._vdataF32![offset++] = positions[0].x;
             this._vdataF32![offset++] = positions[0].y;
             this._vdataF32![offset++] = positions[0].z;
@@ -156,7 +156,7 @@ export class LineModel extends scene.Model {
             this._vdataF32![offset++] = _temp_v1.x;
             this._vdataF32![offset++] = _temp_v1.y;
             this._vdataF32![offset++] = _temp_v1.z;
-            this._vdataUint32![offset++] = color.evaluate(0, 1)._val;
+            this._vdataUint32![offset++] = Color.toUint32(color.evaluate(0, 1));
             for (let i = 1; i < positions.length - 1; i++) {
                 Vec3.subtract(_temp_v1, positions[i - 1], positions[i]);
                 Vec3.subtract(_temp_v2, positions[i + 1], positions[i]);
@@ -172,7 +172,7 @@ export class LineModel extends scene.Model {
                 this._vdataF32![offset++] = _temp_v2.x;
                 this._vdataF32![offset++] = _temp_v2.y;
                 this._vdataF32![offset++] = _temp_v2.z;
-                this._vdataUint32![offset++] = color.evaluate(seg, 1)._val;
+                this._vdataUint32![offset++] = Color.toUint32(color.evaluate(seg, 1));
                 this._vdataF32![offset++] = positions[i].x;
                 this._vdataF32![offset++] = positions[i].y;
                 this._vdataF32![offset++] = positions[i].z;
@@ -183,7 +183,7 @@ export class LineModel extends scene.Model {
                 this._vdataF32![offset++] = _temp_v2.x;
                 this._vdataF32![offset++] = _temp_v2.y;
                 this._vdataF32![offset++] = _temp_v2.z;
-                this._vdataUint32![offset++] = color.evaluate(seg, 1)._val;
+                this._vdataUint32![offset++] = Color.toUint32(color.evaluate(seg, 1));
             }
             Vec3.subtract(_temp_v1, positions[positions.length - 1], positions[positions.length - 2]);
             this._vdataF32![offset++] = positions[positions.length - 1].x;
@@ -196,7 +196,7 @@ export class LineModel extends scene.Model {
             this._vdataF32![offset++] = _temp_v1.x;
             this._vdataF32![offset++] = _temp_v1.y;
             this._vdataF32![offset++] = _temp_v1.z;
-            this._vdataUint32![offset++] = color.evaluate(1, 1)._val;
+            this._vdataUint32![offset++] = Color.toUint32(color.evaluate(1, 1));
             this._vdataF32![offset++] = positions[positions.length - 1].x;
             this._vdataF32![offset++] = positions[positions.length - 1].y;
             this._vdataF32![offset++] = positions[positions.length - 1].z;
@@ -207,7 +207,7 @@ export class LineModel extends scene.Model {
             this._vdataF32![offset++] = _temp_v1.x;
             this._vdataF32![offset++] = _temp_v1.y;
             this._vdataF32![offset++] = _temp_v1.z;
-            this._vdataUint32![offset++] = color.evaluate(1, 1)._val;
+            this._vdataUint32![offset++] = Color.toUint32(color.evaluate(1, 1));
         }
         this.updateIA(Math.max(0, positions.length - 1));
     }

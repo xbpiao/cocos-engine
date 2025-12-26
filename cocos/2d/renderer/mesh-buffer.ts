@@ -23,7 +23,7 @@
 */
 
 import { JSB } from 'internal:constants';
-import { Device, BufferUsageBit, MemoryUsageBit, Attribute, Buffer, BufferInfo, InputAssembler, InputAssemblerInfo } from '../../gfx';
+import { Device, BufferUsageBit, MemoryUsageBit, Attribute, Buffer, BufferInfo, InputAssembler, InputAssemblerInfo, Feature, API } from '../../gfx';
 import { getAttributeStride } from './vertex-format';
 import { sys, getError, warnID, assertIsTrue } from '../../core';
 import { NativeUIMeshBuffer } from './native-2d';
@@ -230,9 +230,9 @@ export class MeshBuffer {
     constructor () {
         if (JSB) {
             this._nativeObj = new NativeUIMeshBuffer();
+            this.initSharedBuffer();
+            this.syncSharedBufferToNative();
         }
-        this.initSharedBuffer();
-        this.syncSharedBufferToNative();
     }
 
     /**
@@ -251,7 +251,12 @@ export class MeshBuffer {
 
         this.floatsPerVertex = getAttributeStride(attrs) >> 2;
 
-        assertIsTrue(this._initVDataCount / this._floatsPerVertex < 65536, getError(9005));
+        var vDataCountLimit = 65536; // 2^16 - 1
+        const glApi = device.gfxAPI;
+        if (glApi === API.WEBGPU || glApi === API.WEBGL2 || glApi === API.WEBGL && device.hasFeature(Feature.ELEMENT_INDEX_UINT)) {
+            vDataCountLimit = 4294967295; // 2^32 - 1
+        }
+        assertIsTrue(this._initVDataCount / this._floatsPerVertex < vDataCountLimit, getError(9005));
 
         if (!this.vData || !this.iData) {
             this.vData = new Float32Array(this._initVDataCount);
@@ -284,11 +289,13 @@ export class MeshBuffer {
         // Destroy InputAssemblers
         for (let i = 0; i < this._iaPool.length; ++i) {
             const iaRef = this._iaPool[i];
-            if (iaRef.vertexBuffers[0]) {
-                iaRef.vertexBuffers[0].destroy();
+            const vertexBuffer0 = iaRef.vertexBuffers[0];
+            if (vertexBuffer0) {
+                vertexBuffer0.destroy();
             }
-            if (iaRef.indexBuffer) {
-                iaRef.indexBuffer.destroy();
+            const indexBuffer = iaRef.indexBuffer;
+            if (indexBuffer) {
+                indexBuffer.destroy();
             }
             iaRef.ia.destroy();
         }
@@ -410,9 +417,9 @@ export class MeshBuffer {
     }
 
     private createNewIA (device: Device): IIARef {
-        let ia;
-        let vertexBuffers;
-        let indexBuffer;
+        let ia: InputAssembler;
+        let vertexBuffers: Buffer[];
+        let indexBuffer: Buffer;
         // HACK: After sharing buffer between drawcalls, the performance degradation a lots on iOS 14 or iPad OS 14 device
         // TODO: Maybe it can be removed after Apple fixes it?
         if (sys.__isWebIOS14OrIPadOS14Env || !this._iaPool[0]) {
@@ -438,7 +445,7 @@ export class MeshBuffer {
         } else {
             ia = device.createInputAssembler(this._iaInfo);
             vertexBuffers = this._iaInfo.vertexBuffers;
-            indexBuffer = this._iaInfo.indexBuffer;
+            indexBuffer = this._iaInfo.indexBuffer!;
         }
         return {
             ia,

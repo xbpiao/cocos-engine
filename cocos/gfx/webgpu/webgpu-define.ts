@@ -27,7 +27,7 @@
 */
 
 import { WEBGPU } from 'internal:constants';
-import { gfx, webgpuAdapter, glslangWasmModule, promiseForWebGPUInstantiation, spirvOptModule, twgslModule } from '../../webgpu/instantiated';
+import { gfx, webgpuAdapter, glslangWasmModule, promiseForWebGPUInstantiation, twgslModule } from '../../webgpu/instantiated';
 import {
     Texture, CommandBuffer, DescriptorSet, Device, InputAssembler, Buffer, Shader
 } from './override';
@@ -36,6 +36,7 @@ import {
 } from '../base/define';
 
 import { ccwindow } from '../../core/global-exports';
+import { warn } from 'console';
 
 
 WEBGPU && promiseForWebGPUInstantiation.then(() => {
@@ -128,7 +129,8 @@ WEBGPU && promiseForWebGPUInstantiation.then(() => {
     const oldCmdCopyBuffersToTexture = CommandBuffer.prototype.copyBuffersToTexture;
     CommandBuffer.prototype.copyBuffersToTexture = function (buffers: Readonly<ArrayBufferView[]>, texture: typeof Texture, regions: Readonly<BufferTextureCopy[]>) {
         const ucharBuffers: Uint8Array[] = [];
-        for (let i = 0; i < buffers.length; ++i) {
+        const buffSize = buffers.length
+        for (let i = 0; i < buffSize; ++i) {
             const buffer = buffers[i];
             if ('buffer' in buffer) {
                 ucharBuffers.push(new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength));
@@ -142,7 +144,8 @@ WEBGPU && promiseForWebGPUInstantiation.then(() => {
     const oldDeviceCopyBuffersToTexture = Device.prototype.copyBuffersToTexture;
     Device.prototype.copyBuffersToTexture = function (buffers: Readonly<ArrayBufferView[]>, texture: typeof Texture, regions: Readonly<BufferTextureCopy[]>) {
         const ucharBuffers: Uint8Array[] = [];
-        for (let i = 0; i < buffers.length; ++i) {
+        const buffSize = buffers.length;
+        for (let i = 0; i < buffSize; ++i) {
             const buffer = buffers[i];
             if ('buffer' in buffer) {
                 ucharBuffers.push(new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength));
@@ -155,7 +158,8 @@ WEBGPU && promiseForWebGPUInstantiation.then(() => {
 
     Device.prototype.copyTexImagesToTexture = function (texImages: TexImageSource[], texture: typeof Texture, regions: BufferTextureCopy[]) {
         const buffers: Uint8Array[] = [];
-        for (let i = 0; i < regions.length; i++) {
+        const regionSize = regions.length;
+        for (let i = 0; i < regionSize; i++) {
             if ('getContext' in texImages[i]) {
                 const canvasElem = texImages[i] as HTMLCanvasElement;
                 const imageData = canvasElem.getContext('2d')?.getImageData(0, 0, texImages[i].width, texImages[i].height);
@@ -190,7 +194,7 @@ WEBGPU && promiseForWebGPUInstantiation.then(() => {
                 }
                 buffers[i] = data;
             } else {
-                console.log('imageBmp copy not impled!');
+                warn('imageBmp copy not impled!');
             }
         }
 
@@ -213,16 +217,6 @@ WEBGPU && promiseForWebGPUInstantiation.then(() => {
 
         // replaceAll --> es 2021 required
         let code = shaderSource;
-        // referredMap.forEach((value, key)=> {
-        //     const samplerName = key;
-        //     const samplerType = value;
-        //     const exp = new RegExp(`\\b${samplerName}\\b([^;])`);
-        //     let it = exp.exec(code);
-        //     while (it) {
-        //         code = code.replace(exp, `sampler${samplerType}(_${samplerName}, _${samplerName}_sampler)${it[1]}`);
-        //         it = exp.exec(code);
-        //     }
-        // });
         let sampReg = /.*?(\(set = \d+, binding = )(\d+)\) uniform[^;]+sampler(\w*) (\w+);/g;
         let it = sampReg.exec(code);
         while (it) {
@@ -249,16 +243,14 @@ WEBGPU && promiseForWebGPUInstantiation.then(() => {
         const paramTypeMap = new Map<string, string>();
         while (funcIter) {
             paramTypeMap.clear();
-
             const params = funcIter[2];
             let paramsRes = params.slice();
             if (params.includes('sampler')) {
                 const paramIndexSet = new Set<number>();
                 const paramArr = params.split(',');
-
-                for (let i = 0; i < paramArr.length; ++i) {
+                const paramSize = paramArr.length;
+                for (let i = 0; i < paramSize; ++i) {
                     const paramDecl = paramArr[i].split(' ');
-                    // assert(paramDecl.length >= 2)
                     const typeDecl = paramDecl[paramDecl.length - 2];
                     if (typeDecl.includes('sampler') && typeDecl !== 'sampler') {
                         const samplerType = typeDecl.replace('sampler', '');
@@ -268,7 +260,6 @@ WEBGPU && promiseForWebGPUInstantiation.then(() => {
                         paramTypeMap.set(paramName, samplerType);
                     }
                 }
-                // let singleParamReg = new RegExp(`(\\W?)(\\w+)\\s+\\b([^,)]+)\\b`);
 
                 code = code.replace(params, paramsRes);
 
@@ -284,7 +275,8 @@ WEBGPU && promiseForWebGPUInstantiation.then(() => {
                             let params = stripStr.split(',');
                             let queued = 0; // '('
                             let paramIndex = 0;
-                            for (let i = 0; i < params.length; ++i) {
+                            const currParamsSize = params.length;
+                            for (let i = 0; i < currParamsSize; ++i) {
                                 if (params[i].includes('(')) {
                                     ++queued;
                                 }
@@ -292,7 +284,7 @@ WEBGPU && promiseForWebGPUInstantiation.then(() => {
                                     --queued;
                                 }
 
-                                if (!queued || i === params.length - 1) {
+                                if (!queued || i === currParamsSize - 1) {
                                     if (paramIndexSet.has(paramIndex)) {
                                         params[i] += `, ${params[i]}_sampler`;
                                     }
@@ -350,7 +342,6 @@ WEBGPU && promiseForWebGPUInstantiation.then(() => {
         const precisionKeyWord = 'highp';
         const isNanIndex = code.indexOf('isnan');
         if (isNanIndex !== -1) {
-            // getPrecision(isNanIndex);
             functionDefs += `\n
              bool isNan(${precisionKeyWord} float val) {
                  return (val < 0.0 || 0.0 < val || val == 0.0) ? false : true;
@@ -361,7 +352,6 @@ WEBGPU && promiseForWebGPUInstantiation.then(() => {
 
         const isInfIndex = code.indexOf('isinf');
         if (isInfIndex !== -1) {
-            // getPrecision(isInfIndex);
             functionDefs += `\n
              bool isInf(${precisionKeyWord} float x) {
                  return x == x * 2.0 && x != 0.0;
@@ -418,7 +408,8 @@ WEBGPU && promiseForWebGPUInstantiation.then(() => {
     const createShader = Device.prototype.createShader;
     Device.prototype.createShader = function (shaderInfo: ShaderInfo) {
         const wgslStages: string[] = [];
-        for (let i = 0; i < shaderInfo.stages.length; ++i) {
+        const stageSize = shaderInfo.stages.length;
+        for (let i = 0; i < stageSize; ++i) {
             let glslSource = seperateCombinedSamplerTexture(shaderInfo.stages[i].source);
             const stageStr = shaderInfo.stages[i].stage === ShaderStageFlagBit.VERTEX ? 'vertex'
                 : shaderInfo.stages[i].stage === ShaderStageFlagBit.FRAGMENT ? 'fragment' : 'compute';

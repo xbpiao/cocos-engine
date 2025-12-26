@@ -24,6 +24,8 @@
 
 import { ccenum } from '../core';
 import { legacyCC } from '../core/global-exports';
+import spineLib from './lib/spine-core';
+import { SPINE_VERSION } from './lib/spine-version';
 
 /**
  * @en
@@ -46,8 +48,10 @@ import { legacyCC } from '../core/global-exports';
 export * from './skeleton';
 export * from './skeleton-data';
 export * from './assembler';
+export * from './lib/spine-version';
 
 export const spine = globalThis.spine;
+spine.EventType = spineLib.EventType
 export const VertexEffectDelegate = spine.VertexEffectDelegate;
 
 
@@ -89,16 +93,16 @@ export enum AnimationEventType {
      */
     END = 2,
     /**
-     * @en The entry will be disposed.
-     * @zh entry 将被销毁。
-     */
-    DISPOSE = 3,
-    /**
      * @en The play spine skeleton animation complete type.
      * @zh 播放骨骼动画完成。
      * @property {Number} COMPLETE
      */
-    COMPLETE = 4,
+    COMPLETE = 3,
+    /**
+     * @en The entry will be disposed.
+     * @zh entry 将被销毁。
+     */
+    DISPOSE = 4,
     /**
      * @en The spine skeleton animation event type.
      * @zh 骨骼动画事件。
@@ -109,4 +113,8 @@ export enum AnimationEventType {
 ccenum(AnimationEventType);
 
 legacyCC.internal.SpineAnimationEventType = AnimationEventType;
+legacyCC.internal.SPINE_VERSION = SPINE_VERSION;
 
+export function loadWasmModuleSpine (): Promise<void> {
+    return Promise.resolve();
+}

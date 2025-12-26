@@ -23,10 +23,11 @@
 */
 
 import { ensureWasmModuleReady, instantiateWasm } from 'pal/wasm';
-import { CULL_ASM_JS_MODULE, FORCE_BANNING_BULLET_WASM, WASM_SUPPORT_MODE } from 'internal:constants';
+import { BUILD, LOAD_BULLET_MANUALLY, NATIVE_CODE_BUNDLE_MODE } from 'internal:constants';
 import { game } from '../../game';
-import { debug, error, getError, log, sys } from '../../core';
-import { WebAssemblySupportMode } from '../../misc/webassembly-support';
+import { error, log, sys } from '../../core';
+import { NativeCodeBundleMode } from '../../misc/webassembly-support';
+import type { BulletCache } from './bullet-cache';
 
 //corresponds to bulletType in bullet-compile
 export enum EBulletType{
@@ -80,7 +81,7 @@ export enum EBulletDebugDrawModes
 }
 
 interface BtCache {
-    CACHE: any,
+    CACHE: typeof BulletCache,
     BODY_CACHE_NAME: string,
     CCT_CACHE_NAME: string,
 }
@@ -100,13 +101,14 @@ function initWASM (wasmFactory, wasmUrl: string): Promise<void> {
                 receiveInstance: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void,
             ) {
                 // NOTE: the Promise return by instantiateWasm hook can't be caught.
-                instantiateWasm(wasmUrl, importObject).then((result: any) => {
-                    receiveInstance(result.instance as WebAssembly.Instance, result.module as WebAssembly.Module);
+                instantiateWasm(wasmUrl, importObject).then((result) => {
+                    receiveInstance(result.instance, result.module);
                 }).catch((err) => reject(errorMessage(err)));
             },
         }).then((instance: any) => {
             log('[bullet]:bullet wasm lib loaded.');
             bt = instance as Bullet.instance;
+            globalThis.Bullet = bt as any;
         }).then(resolve).catch((err: any) => reject(errorMessage(err)));
     });
 }
@@ -126,11 +128,9 @@ function initASM (asmFactory): Promise<void> {
 }
 
 function shouldUseWasmModule (): boolean {
-    if (FORCE_BANNING_BULLET_WASM) {
-        return false;
-    } else if (WASM_SUPPORT_MODE === WebAssemblySupportMode.MAYBE_SUPPORT) {
+    if (NATIVE_CODE_BUNDLE_MODE === (NativeCodeBundleMode.BOTH as number)) {
         return sys.hasFeature(sys.Feature.WASM);
-    } else if (WASM_SUPPORT_MODE === WebAssemblySupportMode.SUPPORT) {
+    } else if (NATIVE_CODE_BUNDLE_MODE === (NativeCodeBundleMode.WASM as number)) {
         return true;
     } else {
         return false;
@@ -139,21 +139,23 @@ function shouldUseWasmModule (): boolean {
 
 export function waitForAmmoInstantiation (): Promise<void> {
     const errorReport = (msg: any): void => { error(msg); };
-    return ensureWasmModuleReady().then(() => Promise.all([
-        import('external:emscripten/bullet/bullet.release.wasm.js'),
-        import('external:emscripten/bullet/bullet.release.wasm.wasm'),
-        import('external:emscripten/bullet/bullet.release.asm.js'),
-    ]).then(([
-        { default: bulletWasmFactory },
-        { default: bulletWasmUrl },
-        { default: bulletAsmFactory },
-    ]) => {
+    return ensureWasmModuleReady().then(() => {
         if (shouldUseWasmModule()) {
-            return initWASM(bulletWasmFactory, bulletWasmUrl);
+            return Promise.all([
+                import('external:emscripten/bullet/bullet.release.wasm.js'),
+                import('external:emscripten/bullet/bullet.release.wasm.wasm'),
+            ]).then(([
+                { default: bulletWasmFactory },
+                { default: bulletWasmUrl },
+            ]) => initWASM(bulletWasmFactory, bulletWasmUrl));
         } else {
-            return initASM(bulletAsmFactory);
+            return import('external:emscripten/bullet/bullet.release.asm.js').then(
+                ({ default: bulletAsmFactory }) => initASM(bulletAsmFactory),
+            );
         }
-    })).catch(errorReport);
+    }).catch(errorReport);
 }
 
-game.onPostInfrastructureInitDelegate.add(waitForAmmoInstantiation);
+if (!BUILD || !LOAD_BULLET_MANUALLY) {
+    game.onPostInfrastructureInitDelegate.add(waitForAmmoInstantiation);
+}

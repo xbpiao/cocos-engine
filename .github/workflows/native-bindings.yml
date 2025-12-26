@@ -12,7 +12,7 @@ jobs:
         node-version: [18.x]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Install CMake & Clang Tidy
         run: |
           sudo apt update --fix-missing
@@ -38,17 +38,10 @@ jobs:
           ninja -C build genbindings
           cd ..
           npm install
-          cd scripts/build-engine
-          echo "Installing babel dependencies ..."
-          npm install
-          echo "Build typescripts ... "
-          npm run build
-          cd ../..
           echo " parsing ..."
           node .github/workflows/gen_decorators.js
           echo " generate done!"
           git checkout HEAD package.json package-lock.json
-          git checkout HEAD scripts # revert all changes within build-engine/
 
       - name: Update auto-gen source files 
         run: |
@@ -80,7 +73,7 @@ jobs:
           
       - name: Notify PR author on error
         if: ${{ failure() }}
-        uses: actions/github-script@v5
+        uses: actions/github-script@v7
         with:
           script: |
             const issue_number = context.payload.pull_request.number;

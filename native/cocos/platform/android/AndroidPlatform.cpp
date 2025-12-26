@@ -51,6 +51,8 @@
 #include "base/StringUtil.h"
 #include "engine/EngineEvents.h"
 #include "paddleboat.h"
+#include "platform/java/jni/JniImp.h"
+#include "platform/interfaces/modules/Device.h"
 
 #define ABORT_GAME                          \
     {                                       \
@@ -156,7 +158,7 @@ public:
         }
         ABORT_IF(_jniEnv != nullptr)
 
-        Paddleboat_init(_jniEnv, platform->_app->activity->javaGameActivity);
+        Paddleboat_init(_jniEnv, cc::JniHelper::getContext());
         Paddleboat_setControllerStatusCallback(gameControllerStatusCallback, this);
         // This is needed to allow controller events through to us.
         // By default, only touch-screen events are passed through, to match the
@@ -235,7 +237,7 @@ public:
                     controllerEvent = true;
                 } else {
                     // Didn't belong to a game controller, process it ourselves if it is a touch event
-                    bool isMouseEvent = motionEvent->pointerCount > 0 && (motionEvent->pointers[0].toolType == AMOTION_EVENT_TOOL_TYPE_STYLUS || motionEvent->pointers[0].toolType == AMOTION_EVENT_TOOL_TYPE_MOUSE);
+                    bool isMouseEvent = motionEvent->pointerCount > 0 && motionEvent->pointers[0].toolType == AMOTION_EVENT_TOOL_TYPE_MOUSE;
                     if (isMouseEvent) {
                         cookGameActivityMouseEvent(motionEvent);
                     } else {
@@ -421,7 +423,7 @@ public:
             int actionMasked = action & AMOTION_EVENT_ACTION_MASK;
             int eventChangedIndex = -1;
 
-            bool isMouseEvent = motionEvent->pointerCount > 0 && (motionEvent->pointers[0].toolType == AMOTION_EVENT_TOOL_TYPE_STYLUS || motionEvent->pointers[0].toolType == AMOTION_EVENT_TOOL_TYPE_MOUSE);
+            bool isMouseEvent = motionEvent->pointerCount > 0 && motionEvent->pointers[0].toolType == AMOTION_EVENT_TOOL_TYPE_MOUSE;
 
             if (actionMasked == AMOTION_EVENT_ACTION_DOWN ||
                 actionMasked == AMOTION_EVENT_ACTION_POINTER_DOWN) {
@@ -531,6 +533,7 @@ public:
                 if (!_launched) {
                     _launched = true;
 
+                    _androidPlatform->_rotation = getDeviceRotationJNI();
                     ISystemWindowInfo info;
                     info.width = ANativeWindow_getWidth(nativeWindow);
                     info.height = ANativeWindow_getHeight(nativeWindow);
@@ -568,6 +571,10 @@ public:
                 }
                 // NOLINTNEXTLINE
                 events::WindowDestroy::broadcast(ISystemWindow::mainWindowId);
+
+                auto *windowMgr = _androidPlatform->getInterface<SystemWindowManager>();
+                auto *window = static_cast<cc::SystemWindow *>(windowMgr->getWindow(ISystemWindow::mainWindowId));
+                window->setWindowHandle(nullptr);
                 break;
             }
             case APP_CMD_GAINED_FOCUS:
@@ -626,13 +633,35 @@ public:
                 events::WindowEvent::broadcast(ev);
                 break;
             }
-            case APP_CMD_CONFIG_CHANGED:
+            case APP_CMD_CONFIG_CHANGED: {
                 CC_LOG_INFO("AndroidPlatform: APP_CMD_CONFIG_CHANGED");
+                int rotation = getDeviceRotationJNI();
+                if (_androidPlatform->_rotation != rotation) {
+                    CC_LOG_INFO("AndroidPlatform: orientation-change");
+                    _androidPlatform->_rotation = rotation;
+                    int orientation = static_cast<int>(Device::Orientation::PORTRAIT);
+                    switch (rotation) {
+                        case 0: // ROTATION_0
+                            orientation = static_cast<int>(Device::Orientation::PORTRAIT);
+                            break;
+                        case 1: // ROTATION_90
+                            orientation = static_cast<int>(cc::Device::Orientation::LANDSCAPE_RIGHT);
+                            break;
+                        case 2: // ROTATION_180
+                            orientation = static_cast<int>(cc::Device::Orientation::PORTRAIT_UPSIDE_DOWN);
+                            break;
+                        case 3: // ROTATION_270
+                            orientation = static_cast<int>(cc::Device::Orientation::LANDSCAPE_LEFT);
+                            break;
+                    }
+                    cc::events::Orientation::broadcast(orientation);
+                }
                 // Window was resized or some other configuration changed.
                 // Note: we don't handle this event because we check the surface dimensions
                 // every frame, so that's how we know it was resized. If you are NOT doing that,
                 // then you need to handle this event!
                 break;
+            }
             case APP_CMD_LOW_MEMORY: {
                 // system told us we have low memory. So if we are not visible, let's
                 // cooperate by deallocating all of our graphic resources.
@@ -824,13 +853,12 @@ void AndroidPlatform::exit() {
 int32_t AndroidPlatform::loop() {
     IXRInterface *xr = CC_GET_XR_INTERFACE();
     while (true) {
-        int events;
         struct android_poll_source *source;
 
         // suspend thread while _loopTimeOut set to -1
-        while ((ALooper_pollAll(_loopTimeOut, nullptr, &events,
-                                reinterpret_cast<void **>(&source))) >= 0) {
-            // process event
+        while (ALooper_pollOnce(_loopTimeOut, nullptr, nullptr,
+                                reinterpret_cast<void **>(&source)) >= 0) {
+            // Process event
             if (source != nullptr) {
                 source->process(_app, source);
             }

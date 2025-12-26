@@ -43,10 +43,11 @@ USING_NS_MW; // NOLINT(google-build-using-namespace)
 
 using namespace cc;      // NOLINT(google-build-using-namespace)
 using namespace cc::gfx; // NOLINT(google-build-using-namespace)
+using namespace spine;
 static const std::string TECH_STAGE = "opaque";
 static const std::string TEXTURE_KEY = "texture";
 
-namespace spine {
+namespace cc {
 
 SkeletonCacheAnimation::SkeletonCacheAnimation(const std::string &uuid, bool isShare) {
     if (isShare) {
@@ -84,6 +85,7 @@ SkeletonCacheAnimation::~SkeletonCacheAnimation() {
     for (auto &item : _materialCaches) {
         CC_SAFE_DELETE(item.second);
     }
+    _entity = nullptr;
     stopSchedule();
 }
 
@@ -157,15 +159,14 @@ void SkeletonCacheAnimation::render(float /*dt*/) {
     if (!_animationData) return;
     SkeletonCache::FrameData *frameData = _animationData->getFrameData(_curFrameIndex);
     if (!frameData) return;
-    auto *entity = _entity;
-    entity->clearDynamicRenderDrawInfos();
+    if (!_entity || !_entity->getNode()) return;
+    _entity->clearDynamicRenderDrawInfos();
 
     const auto &segments = frameData->getSegments();
     const auto &colors = frameData->getColors();
     if (segments.empty() || colors.empty()) return;
 
     auto *mgr = MiddlewareManager::getInstance();
-    if (!mgr->isRendering) return;
 
     _sharedBufferOffset->reset();
     _sharedBufferOffset->clear();
@@ -196,7 +197,7 @@ void SkeletonCacheAnimation::render(float /*dt*/) {
     int vs = _useTint ? vs2 : vs1;
     int vbs = _useTint ? vbs2 : vbs1;
 
-    auto &nodeWorldMat = entity->getNode()->getWorldMatrix();
+    auto &nodeWorldMat = _entity->getNode()->getWorldMatrix();
 
     int colorOffset = 0;
     SkeletonCache::ColorData *nowColor = colors[colorOffset++];
@@ -238,7 +239,7 @@ void SkeletonCacheAnimation::render(float /*dt*/) {
     }
 
     auto handleColor = [&](SkeletonCache::ColorData *colorData) {
-        tempA = colorData->finalColor.a * _nodeColor.a;
+        tempA = colorData->finalColor.a * _entity->getOpacity();
         multiplier = _premultipliedAlpha ? tempA / 255 : 1;
         tempR = _nodeColor.r * multiplier;
         tempG = _nodeColor.g * multiplier;
@@ -268,7 +269,7 @@ void SkeletonCacheAnimation::render(float /*dt*/) {
             vertexFloats = segment->vertexFloatCount;
         }
         curDrawInfo = requestDrawInfo(segmentCount++);
-        entity->addDynamicRenderDrawInfo(curDrawInfo);
+        _entity->addDynamicRenderDrawInfo(curDrawInfo);
         // fill new texture index
         curTexture = static_cast<cc::Texture2D *>(segment->getTexture()->getRealTexture());
         gfx::Texture *texture = curTexture->getGFXTexture();
@@ -287,7 +288,7 @@ void SkeletonCacheAnimation::render(float /*dt*/) {
                 curBlendDst = static_cast<int>(BlendFactor::ONE_MINUS_SRC_ALPHA);
                 break;
             case BlendMode_Screen:
-                curBlendSrc = static_cast<int>(BlendFactor::ONE);
+                curBlendSrc = static_cast<int>(_premultipliedAlpha ? BlendFactor::ONE : BlendFactor::SRC_ALPHA);
                 curBlendDst = static_cast<int>(BlendFactor::ONE_MINUS_SRC_COLOR);
                 break;
             default:
@@ -440,10 +441,7 @@ void SkeletonCacheAnimation::setColor(float r, float g, float b, float a) {
 
 void SkeletonCacheAnimation::setBatchEnabled(bool enabled) {
     if (_enableBatch != enabled) {
-        for (auto &item : _materialCaches) {
-            CC_SAFE_DELETE(item.second);
-        }
-        _materialCaches.clear();
+        _needClearMaterialCaches = true;
         _enableBatch = enabled;
     }
 }
@@ -463,6 +461,9 @@ void SkeletonCacheAnimation::beginSchedule() {
 void SkeletonCacheAnimation::stopSchedule() {
     MiddlewareManager::getInstance()->removeTimer(this);
 
+    if (_entity != nullptr) {
+        _entity->clearDynamicRenderDrawInfos();
+    }
     if (_sharedBufferOffset) {
         _sharedBufferOffset->reset();
         _sharedBufferOffset->clear();
@@ -558,10 +559,7 @@ void SkeletonCacheAnimation::setRenderEntity(cc::RenderEntity *entity) {
 
 void SkeletonCacheAnimation::setMaterial(cc::Material *material) {
     _material = material;
-    for (auto &item : _materialCaches) {
-        CC_SAFE_DELETE(item.second);
-    }
-    _materialCaches.clear();
+    _needClearMaterialCaches = true;
 }
 
 cc::RenderDrawInfo *SkeletonCacheAnimation::requestDrawInfo(int idx) {
@@ -574,6 +572,13 @@ cc::RenderDrawInfo *SkeletonCacheAnimation::requestDrawInfo(int idx) {
 }
 
 cc::Material *SkeletonCacheAnimation::requestMaterial(uint16_t blendSrc, uint16_t blendDst) {
+    if (_needClearMaterialCaches) {
+        for (auto &item : _materialCaches) {
+            CC_SAFE_DELETE(item.second);
+        }
+        _materialCaches.clear();
+        _needClearMaterialCaches = false;
+    }
     uint32_t key = static_cast<uint32_t>(blendSrc) << 16 | static_cast<uint32_t>(blendDst);
     if (_materialCaches.find(key) == _materialCaches.end()) {
         const IMaterialInstanceInfo info{
@@ -601,4 +606,4 @@ cc::Material *SkeletonCacheAnimation::requestMaterial(uint16_t blendSrc, uint16_
     return _materialCaches[key];
 }
 
-} // namespace spine
+} // namespace cc

@@ -24,14 +24,13 @@
 
 import { TrackEntryListeners } from './track-entry-listeners';
 import { vfmtPosUvColor4B, vfmtPosUvTwoColor4B, getAttributeStride } from '../2d/renderer/vertex-format';
-import { SPINE_WASM } from './lib/instantiated';
-import spine from './lib/spine-core.js';
+
+import spine from './lib/spine-core';
 import { SkeletonData } from './skeleton-data';
 import { warn } from '../core/platform/debug';
 
 const MaxCacheTime = 30;
 const FrameTime = 1 / 60;
-const spineTag = SPINE_WASM;
 const _useTint = true;
 const _byteStrideOneColor = getAttributeStride(vfmtPosUvColor4B);
 const _byteStrideTwoColor = getAttributeStride(vfmtPosUvTwoColor4B);
@@ -52,6 +51,7 @@ export interface SkeletonCacheItemInfo {
     listener: TrackEntryListeners;
     curAnimationCache: AnimationCache | null;
     animationsCache: { [key: string]: AnimationCache };
+    assetUUID: string;
 }
 
 class SpineModel {
@@ -74,7 +74,7 @@ export interface AnimationFrame {
 }
 
 export class AnimationCache {
-    protected _instance: spine.SkeletonInstance = null!;
+    protected _instance: spine.SkeletonInstance | null = null;
     protected _state: spine.AnimationState = null!;
     protected _skeletonData: spine.SkeletonData = null!;
     protected _skeleton: spine.Skeleton = null!;
@@ -115,7 +115,7 @@ export class AnimationCache {
 
     public setSkin (skinName: string): void {
         if (this._skeleton) this._skeleton.setSkinByName(skinName);
-        this._instance.setSkin(skinName);
+        this._instance!.setSkin(skinName);
     }
 
     public setAnimation (animationName: string): void {
@@ -132,7 +132,7 @@ export class AnimationCache {
         }
         this._maxFrameIdex = Math.floor((animation as any).duration / FrameTime);
         if (this._maxFrameIdex <= 0) this._maxFrameIdex = 1;
-        this._instance.setAnimation(0, animationName, false);
+        this._instance!.setAnimation(0, animationName, false);
     }
 
     public updateToFrame (frameIdx: number): void {
@@ -143,8 +143,8 @@ export class AnimationCache {
             // Solid update frame rate 1/60.
             this._frameIdx++;
             this.totalTime += FrameTime;
-            this._instance.updateAnimation(FrameTime);
-            const model = this._instance.updateRenderData();
+            this._instance!.updateAnimation(FrameTime);
+            const model = this._instance!.updateRenderData();
             this.updateRenderData(this._frameIdx, model);
             if (this._frameIdx >= this._maxFrameIdex) {
                 this.isCompleted = true;
@@ -170,7 +170,7 @@ export class AnimationCache {
         const vUint8Buf = new Uint8Array(Float32Array.BYTES_PER_ELEMENT * floatStride * vc);
         const iUint16Buf = new Uint16Array(ic);
 
-        const HEAPU8 = spine.wasmUtil.wasm.HEAPU8;
+        const HEAPU8: Uint8Array = spine.wasmUtil.wasm.HEAPU8;
         const vPtr = model.vPtr;
         const vLength = vc * Float32Array.BYTES_PER_ELEMENT * floatStride;
         // eslint-disable-next-line @typescript-eslint/restrict-plus-operands
@@ -189,12 +189,13 @@ export class AnimationCache {
         modelData.iData = iUint16Buf;
 
         const data = model.getData();
+        const textures = model.getTextures();
         const count = data.size();
-        for (let i = 0; i < count; i += 6) {
+        for (let i = 0; i < count; i += 5) {
             const meshData = new SpineDrawItem();
             meshData.iCount = data.get(i + 3);
             meshData.blendMode = data.get(i + 4);
-            meshData.textureID = data.get(i + 5);
+            meshData.textureID = textures.get(i / 5);
             modelData.meshes.push(meshData);
         }
 
@@ -232,7 +233,7 @@ export class AnimationCache {
             }
         }
         const listener = skeletonInfo?.listener;
-        this._instance.setAnimation(0, this._animationName!, false);
+        this._instance!.setAnimation(0, this._animationName!, false);
         this.bind(listener!);
 
         // record cur animation cache
@@ -300,7 +301,10 @@ export class AnimationCache {
     }
 
     public destroy (): void {
-        spine.SkeletonSystem.destroySpineInstance(this._instance);
+        if (this._instance) {
+            this._instance.destroy();
+            this._instance = null;
+        }
     }
 }
 
@@ -310,7 +314,11 @@ class SkeletonCache {
 
     protected _privateMode: boolean;
     protected _skeletonCache: { [key: string]: SkeletonCacheItemInfo };
+
+    //for shared mode only
     protected _animationPool: { [key: string]: AnimationCache };
+    //for shared mode only, key is asset uuid and value is ref count.
+    private _sharedCacheMap: Map<string, number> = new Map<string, number>();
     constructor () {
         this._privateMode = false;
         this._animationPool = {};
@@ -338,42 +346,83 @@ class SkeletonCache {
         }
     }
 
-    public removeSkeleton (uuid: string): void {
-        const skeletonInfo = this._skeletonCache[uuid];
+    public destroySkeleton (assetUuid: string): void {
+        if (!this._privateMode) {
+            let refCount = this._sharedCacheMap.get(assetUuid);
+            if (refCount) {
+                refCount -= 1;
+                if (refCount > 0) {
+                    this._sharedCacheMap.set(assetUuid, refCount);
+                    return;
+                }
+                this._sharedCacheMap.delete(assetUuid);
+            }
+        }
+
+        const skeletonInfo = this._skeletonCache[assetUuid];
         if (!skeletonInfo) return;
+
+        const sharedOperate = (aniKey: string, animationCache: AnimationCache): void => {
+            this._animationPool[`${assetUuid}#${aniKey}`] = animationCache;
+            animationCache.clear();
+        };
+        const privateOperate = (aniKey: string, animationCache: AnimationCache): void => {
+            animationCache.destroy();
+        };
+        const operate = this._privateMode ? privateOperate : sharedOperate;
         const animationsCache = skeletonInfo.animationsCache;
         for (const aniKey in animationsCache) {
             // Clear cache texture, and put cache into pool.
             // No need to create TypedArray next time.
             const animationCache = animationsCache[aniKey];
             if (!animationCache) continue;
-            this._animationPool[`${uuid}#${aniKey}`] = animationCache;
-            animationCache.clear();
+            operate(aniKey, animationCache);
         }
 
-        delete this._skeletonCache[uuid];
+        if (skeletonInfo.skeleton) {
+            spine.wasmUtil.destroySpineSkeleton(skeletonInfo.skeleton);
+        }
+        delete this._skeletonCache[assetUuid];
     }
 
-    public getSkeletonCache (uuid: string, skeletonData: spine.SkeletonData): SkeletonCacheItemInfo {
-        let skeletonInfo = this._skeletonCache[uuid];
-        if (!skeletonInfo) {
-            const skeleton = null;
-            const clipper = null;
-            const state = null;
-            const listener = new TrackEntryListeners();
-
-            this._skeletonCache[uuid] = skeletonInfo = {
-                skeleton,
-                clipper,
-                state,
-                listener,
-                // Cache all kinds of animation frame.
-                // When skeleton is dispose, clear all animation cache.
-                animationsCache: {} as any,
-                curAnimationCache: null,
-            };
+    public createSkeletonInfo (skeletonAsset: SkeletonData): SkeletonCacheItemInfo {
+        const uuid = skeletonAsset.uuid;
+        const runtimeData = skeletonAsset.getRuntimeData();
+        if (!this._privateMode) {
+            let refCount = this._sharedCacheMap.get(uuid);
+            if (!refCount) {
+                refCount = 1;
+            } else {
+                refCount += 1;
+            }
+            this._sharedCacheMap.set(uuid, refCount);
         }
+        if (this._skeletonCache[uuid]) {
+            return this._skeletonCache[uuid];
+        }
+
+        const skeleton = new spine.Skeleton(runtimeData!);
+        const clipper = null;
+        const state = null;
+        const listener = new TrackEntryListeners();
+
+        const skeletonInfo = this._skeletonCache[uuid] = {
+            skeleton,
+            clipper,
+            state,
+            listener,
+            // Cache all kinds of animation frame.
+            // When skeleton is dispose, clear all animation cache.
+            animationsCache: {} as any,
+            curAnimationCache: null,
+            assetUUID: uuid,
+        };
         return skeletonInfo;
+    }
+
+    public getSkeletonInfo (skeletonAsset: SkeletonData): null | SkeletonCacheItemInfo {
+        const uuid = skeletonAsset.uuid;
+        return this._skeletonCache[uuid];
     }
 
     public getAnimationCache (uuid: string, animationName: string): null | AnimationCache {
@@ -417,6 +466,14 @@ class SkeletonCache {
                     animationPool[key].destroy();
                     delete animationPool[key];
                 }
+            }
+            const skeletonInfo = this._skeletonCache[uuid];
+            const skeleton = skeletonInfo && skeletonInfo.skeleton;
+            if (skeleton) {
+                spine.wasmUtil.destroySpineSkeleton(skeleton);
+            }
+            if (skeletonInfo) {
+                delete this._skeletonCache[uuid];
             }
         } else {
             const animationPool = this._animationPool;

@@ -1,17 +1,22 @@
 'use strict';
 
 exports.template = /* html */`
-<div class="preview">
-    <div class="info">
-        <ui-label value="JointCount:0" class="joint-count"></ui-label>
+<ui-section header="i18n:ENGINE.inspector.preview.header" class="preview-section config no-padding" expand>
+    <div class="preview">
+        <div class="info">
+            <ui-label value="JointCount:0" class="joint-count"></ui-label>
+        </div>
+        <div class="image">
+            <canvas class="canvas"></canvas>
+        </div>
     </div>
-    <div class="image">
-        <canvas class="canvas"></canvas>
-    </div>
-</div>
+</ui-section>
 `;
 
 exports.style = /* css */`
+.preview-section {
+    margin-top: 0px;
+}
 .preview {
     border-top: 1px solid var(--color-normal-border);
 }
@@ -48,6 +53,18 @@ const Elements = {
         ready() {
             const panel = this;
 
+            let _isPreviewDataDirty = false;
+            Object.defineProperty(panel, 'isPreviewDataDirty', {
+                get() {
+                    return _isPreviewDataDirty;
+                },
+                set(value) {
+                    if (value !== _isPreviewDataDirty) {
+                        _isPreviewDataDirty = value;
+                        value && panel.refreshPreview();
+                    }
+                },
+            });
             panel.$.canvas.addEventListener('mousedown', async (event) => {
                 await callSkeletonPreviewFunction('onMouseDown', { x: event.x, y: event.y, button: event.button });
 
@@ -109,7 +126,7 @@ const Elements = {
             await panel.glPreview.init({ width: panel.$.canvas.clientWidth, height: panel.$.canvas.clientHeight });
             const info = await callSkeletonPreviewFunction('setSkeleton', panel.asset.uuid);
             panel.infoUpdate(info);
-            panel.refreshPreview();
+            this.isPreviewDataDirty = true;
         },
         close() {
             const panel = this;
@@ -149,9 +166,7 @@ exports.methods = {
             return;
         }
 
-        if (panel.isPreviewDataDirty) {
-            panel.isPreviewDataDirty = false;
-
+        const doDraw = async () => {
             try {
                 const canvas = panel.$.canvas;
                 const image = panel.$.image;
@@ -175,11 +190,11 @@ exports.methods = {
             } catch (e) {
                 console.warn(e);
             }
-        }
+        };
 
-        cancelAnimationFrame(panel.animationId);
-        panel.animationId = requestAnimationFrame(() => {
-            panel.refreshPreview();
+        requestAnimationFrame(async () => {
+            await doDraw();
+            panel.isPreviewDataDirty = false;
         });
     },
 };
@@ -198,6 +213,13 @@ exports.update = function(assetList, metaList) {
     this.metaList = metaList;
     this.asset = assetList[0];
     this.meta = metaList[0];
+
+    // 如何多选就隐藏预览
+    if (assetList.length > 1) {
+        this.$.container.style.display = 'none';
+    } else {
+        this.$.container.style.display = 'block';
+    }
 
     for (const prop in Elements) {
         const element = Elements[prop];

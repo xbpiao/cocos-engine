@@ -22,7 +22,7 @@
  THE SOFTWARE.
 */
 
-import { EDITOR } from 'internal:constants';
+import { EDITOR, USE_XR } from 'internal:constants';
 import { assertIsTrue } from '../../cocos/core/data/utils/asserts';
 import { checkPalIntegrity, withImpl } from '../integrity-check';
 
@@ -85,7 +85,7 @@ export class Pacer {
 
     start (): void {
         if (this._isPlaying) return;
-        const recordStartTime = EDITOR || this._rAF === undefined || globalThis.__globalXR?.isWebXR;
+        const recordStartTime = EDITOR || this._rAF === undefined || (USE_XR && globalThis.__globalXR?.isWebXR);
         const updateCallback = (): void => {
             if (recordStartTime) this._startTime = performance.now();
             if (this._isPlaying) {
@@ -110,25 +110,26 @@ export class Pacer {
         this._frameCount = 0;
     }
 
-    _handleRAF = (): void => {
-        const elapseTime = performance.now() - this._startTime;
+    _handleRAF = (stamp: number): void => {
+        const currTime = performance.now();
+        const elapseTime = currTime - this._startTime;
         const elapseFrame = Math.floor(elapseTime / this._frameTime);
+        if (elapseFrame < 0) {
+            this._startTime = currTime;
+            this._frameCount = 0;
+        }
         if (elapseFrame < this._frameCount) {
-            this._rAF.call(window, this._handleRAF);
+            this._stHandle = this._rAF.call(window, this._handleRAF);
         } else {
-            this._frameCount++;
+            this._frameCount = elapseFrame + 1;
             if (this._callback) {
                 this._callback();
             }
         }
-        if (performance.now() - this._startTime > FRAME_RESET_TIME) {
-            this._startTime = performance.now();
-            this._frameCount = 0;
-        }
     };
 
     private _stTime (callback: () => void): number {
-        if (EDITOR || this._rAF === undefined || globalThis.__globalXR?.isWebXR) {
+        if (EDITOR || this._rAF === undefined || (USE_XR && globalThis.__globalXR?.isWebXR)) {
             const currTime = performance.now();
             const elapseTime = Math.max(0, currTime - this._startTime);
             const timeToCall = Math.max(0, this._frameTime - elapseTime);
@@ -139,7 +140,7 @@ export class Pacer {
     }
 
     private _ctTime (id: number | undefined): void {
-        if (EDITOR || this._cAF === undefined || globalThis.__globalXR?.isWebXR) {
+        if (EDITOR || this._cAF === undefined || (USE_XR && globalThis.__globalXR?.isWebXR)) {
             clearTimeout(id);
         } else if (id) {
             this._cAF.call(window, id);

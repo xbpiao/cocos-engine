@@ -33,6 +33,8 @@
 #include "renderer/gfx-base/GFXTexture.h"
 #include "scene/Camera.h"
 
+#include <atomic>
+
 namespace cc {
 namespace scene {
 
@@ -45,10 +47,26 @@ const ccstd::unordered_map<IScreen::Orientation, gfx::SurfaceTransform> ORIENTAT
     {IScreen::Orientation::LANDSCAPE_LEFT, gfx::SurfaceTransform::ROTATE_270},
 };
 
-}
+std::atomic<uint32_t> sRenderWindowId{0};
 
-RenderWindow::RenderWindow() = default;
-RenderWindow::~RenderWindow() = default;
+} // namespace
+
+RenderWindow::RenderWindow()
+: _renderWindowId(sRenderWindowId++),
+  _colorName("Color" + std::to_string(_renderWindowId)),
+  _depthStencilName("DepthStencil" + std::to_string(_renderWindowId)) {}
+
+RenderWindow::~RenderWindow() {
+    // NOTE: destroy needs to be invoked in the destructor of RenderWindow to avoid wild pointer issues in gfx backend code.
+    // RenderWindow owns `_frameBuffer` and `_colorTextures`, `_frameBuffer` should be released before `_colorTextures`
+    // since gfx::Framebuffer keeps a weak pointer of `_colorTextures` and there is code :
+    // GLES3Device::getInstance()->framebufferHub()->disengage(colorTexture->gpuTexture(), _gpuFBO);
+    // in the GLES3Framebuffer::doDestroy.
+    // Invoking `destroy` here will make sure that `_frameBuffer` is destructed before `_colorTextures`,
+    // otherwise, the `colorTexture` in `disengage(colorTexture->gpuTexture(), _gpuFBO);` will be a wild pointer and
+    // colorTexture->gpuTexture() will be an invalid memory read operation.
+    destroy();
+}
 
 bool RenderWindow::initialize(gfx::Device *device, IRenderWindowInfo &info) {
     if (info.title.has_value() && !info.title.value().empty()) {
@@ -135,6 +153,8 @@ void RenderWindow::resize(uint32_t width, uint32_t height) {
     for (Camera *camera : _cameras) {
         camera->resize(width, height);
     }
+
+    _isResized = true;
 }
 
 void RenderWindow::extractRenderCameras(ccstd::vector<Camera *> &cameras) {
@@ -175,6 +195,11 @@ void RenderWindow::attachCamera(Camera *camera) {
     }
     _cameras.emplace_back(camera);
     sortCameras();
+
+    // This resize should only be handled by the render pipeline
+    // If the camera is attached to the render window,
+    // resize handler should be called to update render window resouces
+    _isResized = true;
 }
 
 void RenderWindow::detachCamera(Camera *camera) {

@@ -26,6 +26,7 @@
 import { RUNTIME_BASED } from 'internal:constants';
 import { minigame } from 'pal/minigame';
 import { js } from '../../core';
+import { forEach } from '../../asset/asset-manager/utilities';
 
 export const BASELINE_RATIO = 0.26;
 let _BASELINE_OFFSET = 0;
@@ -57,7 +58,7 @@ export function getBaselineOffset (): number {
 const MAX_CACHE_SIZE = 100;
 
 interface ICacheNode {
-    key: string | null;
+    key: string;
     value: number,
     prev: ICacheNode | null,
     next: ICacheNode | null
@@ -77,14 +78,14 @@ export class LRUCache {
     private count = 0;
     private limit = 0;
     private datas: Record<string, ICacheNode> = {};
-    private declare head;
-    private declare tail;
+    private head: ICacheNode | null = null;
+    private tail: ICacheNode | null = null;
 
-    constructor (size) {
+    constructor (size: number) {
         this.limit = size;
     }
 
-    public moveToHead (node): void {
+    public moveToHead (node: ICacheNode): void {
         node.next = this.head;
         node.prev = null;
         if (this.head) this.head.prev = node;
@@ -94,25 +95,25 @@ export class LRUCache {
         this.datas[node.key] = node;
     }
 
-    public put (key, value): void {
+    public put (key: string, value: number): void {
         const node = pool.get();
         node!.key = key;
         node!.value = value;
 
         if (this.count >= this.limit) {
             const discard = this.tail;
-            delete this.datas[discard.key];
+            delete this.datas[discard!.key];
             this.count--;
-            this.tail = discard.prev;
-            this.tail.next = null;
-            discard.prev = null;
-            discard.next = null;
-            pool.put(discard);
+            this.tail = discard!.prev;
+            this.tail!.next = null;
+            discard!.prev = null;
+            discard!.next = null;
+            pool.put(discard!);
         }
-        this.moveToHead(node);
+        this.moveToHead(node!);
     }
 
-    public remove (node): void {
+    public remove (node: ICacheNode): void {
         if (node.prev) {
             node.prev.next = node.next;
         } else {
@@ -127,7 +128,7 @@ export class LRUCache {
         this.count--;
     }
 
-    public get (key): number | null {
+    public get (key: string): number | null {
         const node = this.datas[key];
         if (node) {
             this.remove(node);
@@ -144,11 +145,11 @@ export class LRUCache {
         this.tail = null;
     }
 
-    public has (key): boolean {
+    public has (key: string): boolean {
         return !!this.datas[key];
     }
 
-    public delete (key): void {
+    public delete (key: string): void {
         const node = this.datas[key];
         this.remove(node);
     }
@@ -159,9 +160,12 @@ const measureCache = new LRUCache(MAX_CACHE_SIZE);
 const WORD_REG = /([a-zA-Z0-9ÄÖÜäöüßéèçàùêâîôûа-яА-ЯЁё]+|\S)/;
 // eslint-disable-next-line no-useless-escape
 const SYMBOL_REG = /^[!,.:;'}\]%\?>、‘“》？。，！]/;
-const LAST_WORD_REG = /([a-zA-Z0-9ÄÖÜäöüßéèçàùêâîôûаíìÍÌïÁÀáàÉÈÒÓòóŐőÙÚŰúűñÑæÆœŒÃÂãÔõěščřžýáíéóúůťďňĚŠČŘŽÁÍÉÓÚŤżźśóńłęćąŻŹŚÓŃŁĘĆĄ-яА-ЯЁёáàảạãăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệiíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđÁÀẢẠÃĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆIÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴĐ]+|\S)$/;
-const LAST_ENGLISH_REG = /[a-zA-Z0-9ÄÖÜäöüßéèçàùêâîôûаíìÍÌïÁÀáàÉÈÒÓòóŐőÙÚŰúűñÑæÆœŒÃÂãÔõěščřžýáíéóúůťďňĚŠČŘŽÁÍÉÓÚŤżźśóńłęćąŻŹŚÓŃŁĘĆĄ-яА-ЯЁёáàảạãăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệiíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđÁÀẢẠÃĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆIÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴĐ]+$/;
-const FIRST_ENGLISH_REG = /^[a-zA-Z0-9ÄÖÜäöüßéèçàùêâîôûаíìÍÌïÁÀáàÉÈÒÓòóŐőÙÚŰúűñÑæÆœŒÃÂãÔõěščřžýáíéóúůťďňĚŠČŘŽÁÍÉÓÚŤżźśóńłęćąŻŹŚÓŃŁĘĆĄ-яА-ЯЁёáàảạãăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệiíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđÁÀẢẠÃĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆIÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴĐ]/;
+
+const CHAR_SET = '[a-zA-Z0-9ÄÖÜäöüßéèçàùêâîôûаíìÍÌïÁÀáàÉÈÒÓòóŐőÙÚŰúűñÑæÆœŒÃÂãÔõěščřžýáíéóúůťďňĚŠČŘŽÁÍÉÓÚŤżźśóńłęćąŻŹŚÓŃŁĘĆĄ-яА-ЯЁёáàảạãăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệiíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđÁÀẢẠÃĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆIÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴĐ]';
+const LAST_WORD_REG = new RegExp(`(${CHAR_SET}+|\\S)$`);
+const LAST_ENGLISH_REG = new RegExp(`${CHAR_SET}+$`);
+const FIRST_ENGLISH_REG = new RegExp(`^${CHAR_SET}`);
+
 const WRAP_INSPECTION = true;
 // The unicode standard will never assign a character from code point 0xD800 to 0xDFFF
 // high surrogate (0xD800-0xDBFF) and low surrogate(0xDC00-0xDFFF) combines to a character on the Supplementary Multilingual Plane
@@ -214,37 +218,190 @@ export function safeMeasureText (ctx: CanvasRenderingContext2D, string: string, 
     return width;
 }
 
-// in case truncate a character on the Supplementary Multilingual Plane
-// test case: a = '😉🚗'
-// _safeSubstring(a, 1) === '😉🚗'
-// _safeSubstring(a, 0, 1) === '😉'
-// _safeSubstring(a, 0, 2) === '😉'
-// _safeSubstring(a, 0, 3) === '😉'
-// _safeSubstring(a, 0, 4) === '😉🚗'
-// _safeSubstring(a, 1, 2) === _safeSubstring(a, 1, 3) === '😉'
-// _safeSubstring(a, 2, 3) === _safeSubstring(a, 2, 4) === '🚗'
-function _safeSubstring (targetString, startIndex, endIndex?): string {
-    let newStartIndex = startIndex;
-    let newEndIndex = endIndex;
-    const startChar = targetString[startIndex];
-    // lowSurrogateRex
-    if (startChar >= '\uDC00' && startChar <= '\uDFFF') {
-        newStartIndex--;
-    }
-    if (endIndex !== undefined) {
-        if (endIndex - 1 !== startIndex) {
-            const endChar = targetString[endIndex - 1];
-            // highSurrogateRex
-            if (endChar >= '\uD800' && endChar <= '\uDBFF') {
-                newEndIndex--;
+export function getSymbolLength (str: string): number {
+    const length = str.length;
+    let len = 0;
+    let count = 0;
+    let start = 0;
+    let charCode = 0;
+    for (let i = 0; i < length; i++) {
+        charCode = str.charCodeAt(i);
+        if (charCode === 0x200d) {
+            len++;
+            continue;
+        }
+        if (charCode >= 0xd800 && charCode <= 0xdbff) {
+            len++;
+            charCode = str.charCodeAt(i + 1);
+            if (charCode >= 0xdc00 && charCode <= 0xdfff) {
+                len++;
+                if (i + 2 >= length || str.charCodeAt(i + 2) !== 0x200d) {
+                    start += len;
+                    count++;
+                    len = 0;
+                }
+                i++;
+                continue;
             }
-        } else if (startChar >= '\uD800' && startChar <= '\uDBFF') {
+        }
+        start = i + 1;
+        count++;
+        len = 0;
+    }
+    return count;
+}
+
+export function getSymbolAt (str: string, index: number): string  {
+    const length = str.length;
+    let len = 0;
+    let count = 0;
+    let start = 0;
+    let charCode = 0;
+    for (let i = 0; i < length; i++) {
+        charCode = str.charCodeAt(i);
+        if (charCode === 0x200d) {
+            len++;
+            continue;
+        }
+        if (charCode >= 0xd800 && charCode <= 0xdbff) {
+            len++;
+            charCode = str.charCodeAt(i + 1);
+            if (charCode >= 0xdc00 && charCode <= 0xdfff) {
+                len++;
+                if (i + 2 >= length || str.charCodeAt(i + 2) !== 0x200d) {
+                    if (index === count) {
+                        return str.slice(start, start + len);
+                    }
+                    start += len;
+                    count++;
+                    len = 0;
+                }
+                i++;
+                continue;
+            }
+        }
+        if (index === count) {
+            return str.charAt(i);
+        }
+        start = i + 1;
+        count++;
+        len = 0;
+    }
+    return '';
+}
+
+export function getSymbolCodeAt (str: string, index: number): string  {
+    const char = getSymbolAt(str, index);
+    if (char.length === 1) {
+        return `${char.charCodeAt(0)}`;
+    }
+    let charCodes: string = '';
+    for (let j = 0; j < char.length; j++) {
+        charCodes += `${char.charCodeAt(j)}`;
+    }
+    return `${charCodes}`;
+}
+
+function getSymbolStartIndex (targetString: string, index: number): number {
+    if (index >= targetString.length) {
+        return targetString.length;
+    }
+    let startCheckIndex = index;
+    let startChar = targetString[startCheckIndex];
+    while (startCheckIndex >= 0) {
+        if (startChar === '\u200d') {
+            startCheckIndex--;
+            startChar = targetString[startCheckIndex];
+        }
+        if (startChar >= '\uDC00' && startChar <= '\uDFFF') {
+            // lowSurrogateRex
+            if (startCheckIndex - 1 >= 0) {
+                startCheckIndex--;
+                startChar = targetString[startCheckIndex];
+            }
+        }
+        if (startChar >= '\uD800' && startChar <= '\uDBFF') {
             // highSurrogateRex
-            newEndIndex++;
+            if (startCheckIndex - 1 >= 0 && targetString[startCheckIndex - 1] === '\u200d') {
+                startCheckIndex--;
+                startChar = targetString[startCheckIndex];
+            } else {
+                break;
+            }
+        } else {
+            break;
         }
     }
-    return targetString.substring(newStartIndex, newEndIndex) as string;
+    return startCheckIndex;
 }
+
+function getSymbolEndIndex (targetString: string, index: number): number {
+    let newEndIndex = index;
+    let endCheckIndex = index;
+    let endChar = targetString[endCheckIndex];
+    while (endCheckIndex < targetString.length) {
+        if (endChar === '\u200d') {
+            endCheckIndex++;
+            newEndIndex++;
+            endChar = targetString[endCheckIndex];
+            if (endChar >= '\uD800' && endChar <= '\uDBFF') {
+                // highSurrogateRex
+                endCheckIndex++;
+                newEndIndex++;
+                endChar = targetString[endCheckIndex];
+            }
+        }
+        if (endChar >= '\uD800' && endChar <= '\uDBFF') {
+            // highSurrogateRex
+            endCheckIndex++;
+            newEndIndex++;
+            endChar = targetString[endCheckIndex];
+        } else if (endChar >= '\uDC00' && endChar <= '\uDFFF') {
+            // lowSurrogateRex
+            endCheckIndex++;
+            endChar = targetString[endCheckIndex];
+            if (endCheckIndex < targetString.length && targetString[endCheckIndex] === '\u200d') {
+                newEndIndex++;
+                endChar = targetString[endCheckIndex];
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    return newEndIndex;
+}
+
+// in case truncate a character on the Supplementary Multilingual Plane
+// test case: a = '😉🚗'
+// _safeSubstring(a, 1) === '🚗'
+// _safeSubstring(a, 0, 1) === '😉'
+// _safeSubstring(a, 0, 2) === '😉'
+// _safeSubstring(a, 0, 3) === '😉🚗'
+// _safeSubstring(a, 0, 4) === '😉🚗'
+// _safeSubstring(a, 0, 1) === _safeSubstring(a, 0, 2) === '😉'
+// _safeSubstring(a, 2, 3) === _safeSubstring(a, 2, 4) === '🚗'
+function _safeSubstring (targetString: string, startIndex: number, endIndex?: number): string {
+    let newStartIndex = getSymbolStartIndex(targetString, startIndex);
+    if (newStartIndex < startIndex) {
+        newStartIndex = getSymbolEndIndex(targetString, startIndex) + 1;
+    }
+    let newEndIndex = endIndex;
+
+    if (endIndex !== undefined) {
+        endIndex = Math.max(0, endIndex - 1);
+        newEndIndex = getSymbolEndIndex(targetString, endIndex);
+        const newStartEndIndex = getSymbolStartIndex(targetString, endIndex);
+        if (newStartEndIndex < newStartIndex || (newStartEndIndex === newStartIndex && startIndex > newStartIndex)) {
+            newEndIndex = newStartIndex;
+        } else {
+            newEndIndex += 1;
+        }
+    }
+    return targetString.substring(newStartIndex, newEndIndex);
+}
+
 /**
 * @engineInternal
 */

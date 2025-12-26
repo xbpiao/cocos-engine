@@ -24,6 +24,7 @@
 
 import { Mat4, Quat, Vec3, geometry, cclegacy } from '../../core';
 import type { Frustum } from '../../core/geometry';
+import { getPipelineSceneData } from '../../rendering/pipeline-scene-data-utils';
 import { Light, LightType, nt2lm } from './light';
 import { PCFType } from './shadows';
 
@@ -45,11 +46,13 @@ export class SpotLight extends Light {
 
     protected _spotAngle: number = Math.cos(Math.PI / 6);
 
-    protected _pos: Vec3;
+    protected _angleAttenuationStrength = 0;
 
-    protected _aabb: geometry.AABB;
+    protected _pos: Vec3 = new Vec3();
 
-    protected _frustum: geometry.Frustum;
+    protected _aabb: geometry.AABB = geometry.AABB.create();
+
+    protected _frustum: geometry.Frustum = geometry.Frustum.create();
 
     /**
      * @en User-specified full-angle radians.
@@ -110,7 +113,7 @@ export class SpotLight extends Light {
      * @zh 光源的亮度
      */
     get luminance (): number {
-        const isHDR = (cclegacy.director.root).pipeline.pipelineSceneData.isHDR;
+        const isHDR = getPipelineSceneData().isHDR;
         if (isHDR) {
             return this._luminanceHDR;
         } else {
@@ -118,7 +121,7 @@ export class SpotLight extends Light {
         }
     }
     set luminance (value: number) {
-        const isHDR = (cclegacy.director.root).pipeline.pipelineSceneData.isHDR;
+        const isHDR = getPipelineSceneData().isHDR;
         if (isHDR) {
             this.luminanceHDR = value;
         } else {
@@ -171,6 +174,19 @@ export class SpotLight extends Light {
         this._angle = val;
         this._spotAngle = Math.cos(val * 0.5);
 
+        this._needUpdate = true;
+    }
+
+    /**
+     * @en The angle attenuation strength of the spot light.
+     * The larger the value, the softer the edge, and the smaller the value, the harder the edge.
+     * @zh 聚光灯角度衰减强度。值越大，边缘越柔和，值越小，边缘越硬。
+     */
+    get angleAttenuationStrength (): number {
+        return this._angleAttenuationStrength;
+    }
+    set angleAttenuationStrength (val: number) {
+        this._angleAttenuationStrength = val;
         this._needUpdate = true;
     }
 
@@ -240,9 +256,6 @@ export class SpotLight extends Light {
 
     constructor () {
         super();
-        this._aabb = geometry.AABB.create();
-        this._frustum = geometry.Frustum.create();
-        this._pos = new Vec3();
         this._type = LightType.SPOT;
     }
 

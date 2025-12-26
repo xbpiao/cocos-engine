@@ -31,7 +31,7 @@ import { PhysicsGroup } from '../../../physics/framework/physics-enum';
 import { Component } from '../../../scene-graph';
 import { help, serializable, tooltip } from '../../../core/data/decorators';
 
-const { property, type, menu, ccclass } = _decorator;
+const { type, menu, ccclass } = _decorator;
 
 @ccclass('cc.RigidBody2D')
 @help('i18n:cc.RigidBody2D')
@@ -196,9 +196,9 @@ export class RigidBody2D extends Component {
 
     /**
      * @en
-     * The angular velocity of the body.
+     * The angular velocity of the body in radians/second.
      * @zh
-     * 刚体的角速度。
+     * 刚体的角速度，单位是 弧度/秒。
      */
     @type(CCFloat)
     @tooltip('i18n:physics2d.rigidbody.angularVelocity')
@@ -533,7 +533,7 @@ export class RigidBody2D extends Component {
      */
     getInertia (): number {
         if (this._body) {
-            this._body.getInertia();
+            return this._body.getInertia();
         }
         return 0;
     }

@@ -26,7 +26,7 @@
 import { ccclass, tooltip, displayName, type, serializable, disallowAnimation } from 'cc.decorator';
 import { EDITOR, TEST } from 'internal:constants';
 import { Script } from '../asset/assets/scripts';
-import { CCObject } from '../core/data/object';
+import { CCObject, CCObjectFlags } from '../core/data/object';
 import { IDGenerator } from '../core/utils/id-generator';
 import { getClassName, value } from '../core/utils/js';
 import { RenderScene } from '../render-scene/core/render-scene';
@@ -39,7 +39,7 @@ import { CompPrefabInfo } from './prefab/prefab-info';
 import { EventHandler } from './component-event-handler';
 
 const idGenerator = new IDGenerator('Comp');
-const IsOnLoadCalled = CCObject.Flags.IsOnLoadCalled;
+const IsOnLoadCalled = CCObjectFlags.IsOnLoadCalled;
 
 const NullNode = null as unknown as Node;
 
@@ -67,6 +67,10 @@ class Component extends CCObject {
      * @engineInternal
      */
     public static _requireComponent: Constructor<Component> | null = null;
+
+    constructor () {
+        super();
+    }
 
     get name (): string {
         if (this._name) {
@@ -244,6 +248,7 @@ class Component extends CCObject {
     public addComponent (className: string): Component | null;
 
     public addComponent (typeOrClassName: any): Component {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         return this.node.addComponent(typeOrClassName);
     }
 
@@ -262,7 +267,7 @@ class Component extends CCObject {
      * var sprite = node.getComponent(Sprite);
      * ```
      */
-    public getComponent<T extends Component> (classConstructor: Constructor<T>): T | null;
+    public getComponent<T extends Component> (classConstructor: Constructor<T> | AbstractedConstructor<T>): T | null;
 
     /**
      * @en
@@ -281,6 +286,7 @@ class Component extends CCObject {
     public getComponent (className: string): Component | null;
 
     public getComponent (typeOrClassName: any): Component | null {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         return this.node.getComponent(typeOrClassName);
     }
 
@@ -294,7 +300,7 @@ class Component extends CCObject {
      * const sprites = node.getComponents(Sprite);
      * ```
      */
-    public getComponents<T extends Component> (classConstructor: Constructor<T>): T[];
+    public getComponents<T extends Component> (classConstructor: Constructor<T> | AbstractedConstructor<T>): T[];
 
     /**
      * @en Returns all components of supplied type in the node.
@@ -307,7 +313,8 @@ class Component extends CCObject {
      */
     public getComponents (className: string): Component[];
 
-    public getComponents<T extends Component> (typeOrClassName: any): Component[] {
+    public getComponents (typeOrClassName: any): Component[] {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         return this.node.getComponents(typeOrClassName);
     }
 
@@ -321,7 +328,7 @@ class Component extends CCObject {
      * const sprite = node.getComponentInChildren(Sprite);
      * ```
      */
-    public getComponentInChildren<T extends Component> (classConstructor: Constructor<T>): T | null;
+    public getComponentInChildren<T extends Component> (classConstructor: Constructor<T> | AbstractedConstructor<T>): T | null;
 
     /**
      * @en Returns the component of supplied type in any of its children using depth first search.
@@ -335,6 +342,7 @@ class Component extends CCObject {
     public getComponentInChildren (className: string): Component | null;
 
     public getComponentInChildren (typeOrClassName: any): Component | null {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         return this.node.getComponentInChildren(typeOrClassName);
     }
 
@@ -348,7 +356,7 @@ class Component extends CCObject {
      * const sprites = node.getComponentsInChildren(Sprite);
      * ```
      */
-    public getComponentsInChildren<T extends Component> (classConstructor: Constructor<T>): T[];
+    public getComponentsInChildren<T extends Component> (classConstructor: Constructor<T> | AbstractedConstructor<T>): T[];
 
     /**
      * @en Returns all components of supplied type in self or any of its children.
@@ -362,6 +370,7 @@ class Component extends CCObject {
     public getComponentsInChildren (className: string): Component[];
 
     public getComponentsInChildren (typeOrClassName: any): Component[] {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         return this.node.getComponentsInChildren(typeOrClassName);
     }
 
@@ -373,8 +382,11 @@ class Component extends CCObject {
             // issue: https://github.com/cocos/cocos-engine/issues/14643
             const depend = (this.node as any)._getDependComponent(this);
             if (depend.length > 0) {
-                errorID(3626,
-                    getClassName(this), getClassName(depend[0]));
+                errorID(
+                    3626,
+                    getClassName(this),
+                    getClassName(depend[0]),
+                );
                 return false;
             }
         }
@@ -768,11 +780,11 @@ value(Component, '_registerEditorProps', (cls, props): void => {
                 break;
 
             case 'inspector':
-                value(cls, '_inspector', val, true);
+                value(cls as Record<string | number, any>, '_inspector', val, true);
                 break;
 
             case 'icon':
-                value(cls, '_icon', val, true);
+                value(cls as Record<string | number, any>, '_icon', val, true);
                 break;
 
             case 'menu':
@@ -783,8 +795,12 @@ value(Component, '_registerEditorProps', (cls, props): void => {
                     menu = `i18n:menu.custom_script/${menu}`;
                 }
 
-                EDITOR && EditorExtends.Component.removeMenu(cls);
-                EDITOR && EditorExtends.Component.addMenu(cls, menu, props.menuPriority);
+                if (EDITOR) {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                    EditorExtends.Component.removeMenu(cls);
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+                    EditorExtends.Component.addMenu(cls, menu, props.menuPriority);
+                }
                 break;
             }
 

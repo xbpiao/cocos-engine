@@ -34,13 +34,20 @@
 extern "C" void cc_load_all_plugins(); // NOLINT
 
 namespace cc {
+
+BaseGame::~BaseGame() { // NOLINT
+#if (CC_PLATFORM == CC_PLATFORM_ANDROID) && CC_SUPPORT_ADPF
+    ADPFManager::getInstance().destroy();
+#endif
+}
+
 int BaseGame::init() {
     cc::pipeline::GlobalDSManager::setDescriptorSetLayout();
 
     cc_load_all_plugins();
 
 #if (CC_PLATFORM == CC_PLATFORM_ANDROID) && CC_SUPPORT_ADPF
-    ADPFManager::getInstance().Initialize();
+    ADPFManager::getInstance().initialize();
 #endif
 
 #if CC_PLATFORM == CC_PLATFORM_WINDOWS || CC_PLATFORM == CC_PLATFORM_LINUX || CC_PLATFORM == CC_PLATFORM_QNX || CC_PLATFORM == CC_PLATFORM_MACOS

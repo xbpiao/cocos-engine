@@ -22,13 +22,14 @@
  THE SOFTWARE.
 */
 
+/* eslint-disable no-console */
 import { EDITOR, JSB, DEV, DEBUG } from 'internal:constants';
 import debugInfos from '../../../DebugInfos';
-import { legacyCC, ccwindow } from '../global-exports';
+import { legacyCC, ccwindow, VERSION } from '../global-exports';
 
 const ccdocument = ccwindow.document;
 
-const ERROR_MAP_URL = 'https://github.com/cocos-creator/engine/blob/develop/EngineErrorMap.md';
+const ERROR_MAP_URL = `https://github.com/cocos/cocos-engine/blob/${VERSION}/EngineErrorMap.md`;
 
 export type StringSubstitution = number | string;
 
@@ -57,7 +58,8 @@ function formatString (...data: unknown[]): string {
 }
 
 /**
- * @en Outputs a log message to the console. The message may be a single string (with optional substitution values), or it may be any one or more JavaScript objects.
+ * @en Outputs a log message to the console.
+ *     The message may be a single string (with optional substitution values), or it may be any one or more JavaScript objects.
  * @zh 向控制台输出一条日志信息。这条信息可能是单个字符串（包括可选的替代字符串），也可能是一个或多个对象。
  */
 export function log (...data: unknown[]): void {
@@ -65,28 +67,26 @@ export function log (...data: unknown[]): void {
 }
 
 /**
- * @en
- * Outputs a warning message to the console. The message may be a single string (with optional substitution values), or it may be any one or more JavaScript objects.
- * - In Cocos Creator, warning is yellow.
- * - In Chrome, warning have a yellow warning icon with the message text.
- * @zh
- * 向控制台输出一条警告信息。这条信息可能是单个字符串（包括可选的替代字符串），也可能是一个或多个对象。
- * - 在 Cocos Creator 中，警告信息显示是黄色的。<br/>
- * - 在 Chrome 中，警告信息有着黄色的图标以及黄色的消息文本。<br/>
+ * @en Outputs a warning message to the console.
+ *     The message may be a single string (with optional substitution values), or it may be any one or more JavaScript objects.
+ *     - In Cocos Creator, warning is yellow.
+ *     - In Chrome, warning have a yellow warning icon with the message text.
+ * @zh 向控制台输出一条警告信息。这条信息可能是单个字符串（包括可选的替代字符串），也可能是一个或多个对象。
+ *     - 在 Cocos Creator 中，警告信息显示是黄色的。<br/>
+ *     - 在 Chrome 中，警告信息有着黄色的图标以及黄色的消息文本。<br/>
  */
 export function warn (...data: unknown[]): void {
     return ccWarn(...data);
 }
 
 /**
- * @en
- * Outputs an error message to the console. The message may be a single string (with optional substitution values), or it may be any one or more JavaScript objects.
- * - In Cocos Creator, error is red.<br/>
- * - In Chrome, error have a red icon along with red message text.<br/>
- * @zh
- * 向控制台输出一条错误信息。这条信息可能是单个字符串（包括可选的替代字符串），也可能是一个或多个对象。
- * - 在 Cocos Creator 中，错误信息显示是红色的。<br/>
- * - 在 Chrome 中，错误信息有红色的图标以及红色的消息文本。<br/>
+ * @en Outputs an error message to the console.
+ *     The message may be a single string (with optional substitution values), or it may be any one or more JavaScript objects.
+ *     - In Cocos Creator, error is red.<br/>
+ *     - In Chrome, error have a red icon along with red message text.<br/>
+ * @zh 向控制台输出一条错误信息。这条信息可能是单个字符串（包括可选的替代字符串），也可能是一个或多个对象。
+ *     - 在 Cocos Creator 中，错误信息显示是红色的。<br/>
+ *     - 在 Chrome 中，错误信息有红色的图标以及红色的消息文本。<br/>
  */
 export function error (...data: unknown[]): void {
     return ccError(...data);
@@ -120,8 +120,8 @@ export function debug (...data: unknown[]): void {
  */
 export function _resetDebugSetting (mode: DebugMode): void {
     // reset
-    ccLog = ccWarn = ccError = ccAssert = ccDebug = (): void => {
-    };
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
+    ccLog = ccWarn = ccError = ccAssert = ccDebug = (): void => {};
 
     if (mode === DebugMode.NONE) {
         return;
@@ -138,7 +138,8 @@ export function _resetDebugSetting (mode: DebugMode): void {
                 const logDiv = ccdocument.createElement('Div');
                 logDiv.setAttribute('id', 'logInfoDiv');
                 logDiv.setAttribute('width', '200');
-                logDiv.setAttribute('height', legacyCC.game.canvas.height);
+                const height: number = legacyCC.game.canvas.height;
+                logDiv.setAttribute('height', `${height}`);
                 const logDivStyle = logDiv.style;
                 logDivStyle.zIndex = '99999';
                 logDivStyle.position = 'absolute';
@@ -189,10 +190,13 @@ export function _resetDebugSetting (mode: DebugMode): void {
         if (!console.error) {
             console.error = console.log;
         }
+
         if (!console.warn) {
             console.warn = console.log;
         }
 
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
         if (EDITOR || console.error.bind) {
             // use bind to avoid pollute call stacks
             ccError = console.error.bind(console);
@@ -203,8 +207,7 @@ export function _resetDebugSetting (mode: DebugMode): void {
             if (!condition) {
                 const errorText = formatString(message, ...optionalParams);
                 if (DEV) {
-                    // eslint-disable-next-line no-debugger
-                    debugger;
+                    console.error(errorText);
                 } else {
                     throw new Error(errorText);
                 }
@@ -258,7 +261,7 @@ export function _throw (error_: any): any {
     }
 }
 
-function getTypedFormatter (type: 'Log' | 'Warning' | 'Error' | 'Assert'): (id: number, ...args: StringSubstitution[]) => string {
+function getTypedFormatter (type: 'Log' | 'Debug' | 'Warning' | 'Error' | 'Assert'): (id: number, ...args: StringSubstitution[]) => string {
     return (id: number, ...args: StringSubstitution[]): string => {
         const msg = DEBUG ? (debugInfos[id] || 'unknown id') : `${type} ${id}, please go to ${ERROR_MAP_URL}#${id} to see details.`;
         if (args.length === 0) {
@@ -271,6 +274,11 @@ function getTypedFormatter (type: 'Log' | 'Warning' | 'Error' | 'Assert'): (id: 
 const logFormatter = getTypedFormatter('Log');
 export function logID (id: number, ...optionalParams: StringSubstitution[]): void {
     log(logFormatter(id, ...optionalParams));
+}
+
+const debugFormatter = getTypedFormatter('Debug');
+export function debugID (id: number, ...optionalParams: StringSubstitution[]): void {
+    debug(debugFormatter(id, ...optionalParams));
 }
 
 const warnFormatter = getTypedFormatter('Warning');

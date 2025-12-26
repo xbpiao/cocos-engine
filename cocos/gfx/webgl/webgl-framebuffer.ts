@@ -29,35 +29,58 @@ import { WebGLDeviceManager } from './webgl-define';
 import { IWebGLGPUFramebuffer, IWebGLGPUTexture } from './webgl-gpu-objects';
 import { WebGLRenderPass } from './webgl-render-pass';
 
-import { WebGLTexture } from './webgl-texture';
+import { WebGLTexture as CCWebGLTexture } from './webgl-texture';
 
+/** @mangle */
 export class WebGLFramebuffer extends Framebuffer {
-    get gpuFramebuffer (): IWebGLGPUFramebuffer {
+    getGpuFramebuffer (): IWebGLGPUFramebuffer {
         return  this._gpuFramebuffer!;
     }
 
     private _gpuFramebuffer: IWebGLGPUFramebuffer | null = null;
+    private _gpuColorTextures: (WebGLTexture | null)[] = [];
+    private _gpuDepthStencilTexture: WebGLTexture | null | undefined;
 
-    public initialize (info: Readonly<FramebufferInfo>): void {
+    constructor () {
+        super();
+    }
+
+    get needRebuild (): boolean {
+        const gpuFramebuffer = this._gpuFramebuffer;
+        if (gpuFramebuffer) {
+            for (let i = 0; i < gpuFramebuffer.gpuColorTextures.length; i++) {
+                if (gpuFramebuffer.gpuColorTextures[i].glTexture !== this._gpuColorTextures[i]) {
+                    return true;
+                }
+            }
+            if (gpuFramebuffer.gpuDepthStencilTexture?.glTexture !== this._gpuDepthStencilTexture) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public override initialize (info: Readonly<FramebufferInfo>): void {
         this._renderPass = info.renderPass;
         this._colorTextures = info.colorTextures || [];
-        this._depthStencilTexture = info.depthStencilTexture || null;
+        const depthStencilTexture: CCWebGLTexture = this._depthStencilTexture = info.depthStencilTexture  as CCWebGLTexture || null;
 
         let lodLevel = 0;
 
         const gpuColorTextures: IWebGLGPUTexture[] = [];
         for (let i = 0; i < info.colorTextures.length; ++i) {
-            const colorTexture = info.colorTextures[i];
+            const colorTexture = info.colorTextures[i] as CCWebGLTexture;
             if (colorTexture) {
-                gpuColorTextures.push((colorTexture as WebGLTexture).gpuTexture);
-                lodLevel = (colorTexture as WebGLTexture).lodLevel;
+                gpuColorTextures.push(colorTexture.gpuTexture);
+                lodLevel = colorTexture.lodLevel;
             }
         }
 
         let gpuDepthStencilTexture: IWebGLGPUTexture | null = null;
-        if (info.depthStencilTexture) {
-            gpuDepthStencilTexture = (info.depthStencilTexture as WebGLTexture).gpuTexture;
-            lodLevel = (info.depthStencilTexture as WebGLTexture).lodLevel;
+        if (depthStencilTexture) {
+            gpuDepthStencilTexture = depthStencilTexture.gpuTexture;
+            lodLevel = depthStencilTexture.lodLevel;
         }
 
         let width = Number.MAX_SAFE_INTEGER;
@@ -94,14 +117,18 @@ export class WebGLFramebuffer extends Framebuffer {
         };
 
         WebGLCmdFuncCreateFramebuffer(WebGLDeviceManager.instance, this._gpuFramebuffer);
+        this._gpuFramebuffer.gpuColorTextures.forEach((tex) => this._gpuColorTextures.push(tex.glTexture));
+        this._gpuDepthStencilTexture = this._gpuFramebuffer.gpuDepthStencilTexture?.glTexture;
         this._width = this._gpuFramebuffer.width;
         this._height = this._gpuFramebuffer.height;
     }
 
-    public destroy (): void {
+    public override destroy (): void {
         if (this._gpuFramebuffer) {
             WebGLCmdFuncDestroyFramebuffer(WebGLDeviceManager.instance, this._gpuFramebuffer);
             this._gpuFramebuffer = null;
+            this._gpuColorTextures.length = 0;
+            this._gpuDepthStencilTexture = null;
         }
     }
 }

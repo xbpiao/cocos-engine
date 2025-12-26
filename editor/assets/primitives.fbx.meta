@@ -1,5 +1,5 @@
 {
-  "ver": "2.3.12",
+  "ver": "2.3.14",
   "importer": "fbx",
   "imported": true,
   "uuid": "1263d74c-8167-4928-91a6-4e2672411f47",
@@ -74,7 +74,7 @@
       "subMetas": {},
       "userData": {
         "gltfIndex": 2,
-        "triangleCount": 72
+        "triangleCount": 92
       }
     },
     "40ece": {
@@ -198,7 +198,6 @@
         "1263d74c-8167-4928-91a6-4e2672411f47@DefaultMaterial.material"
       ]
     },
-    "redirect": "1263d74c-8167-4928-91a6-4e2672411f47@aae0f",
     "assetFinder": {
       "meshes": [
         "1263d74c-8167-4928-91a6-4e2672411f47@801ec",

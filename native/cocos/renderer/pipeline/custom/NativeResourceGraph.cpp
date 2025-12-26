@@ -27,15 +27,37 @@
 #include "RenderGraphGraphs.h"
 #include "RenderGraphTypes.h"
 #include "cocos/renderer/gfx-base/GFXDevice.h"
-#include "details/GraphView.h"
+#include "cocos/scene/RenderWindow.h"
 #include "details/Range.h"
 #include "gfx-base/GFXDef-common.h"
 #include "pipeline/custom/RenderCommonFwd.h"
-#include "cocos/scene/RenderWindow.h"
 
 namespace cc {
 
 namespace render {
+
+gfx::Texture* RenderSwapchain::getColorTexture(gfx::Swapchain* swapchain) noexcept {
+    CC_EXPECTS(swapchain);
+    gfx::Texture* texture = swapchain->getColorTexture();
+    CC_ENSURES(texture);
+    return texture;
+}
+
+gfx::Texture* RenderSwapchain::getColorTexture(scene::RenderWindow* renderWindow) noexcept {
+    const auto& fb = renderWindow->getFramebuffer();
+    CC_EXPECTS(fb);
+    CC_EXPECTS(fb->getColorTextures().size() == 1);
+    gfx::Texture* texture = fb->getColorTextures()[0];
+    CC_ENSURES(texture);
+    return texture;
+}
+
+gfx::Texture* RenderSwapchain::getDepthStencilTexture(gfx::Swapchain* swapchain) noexcept {
+    CC_EXPECTS(swapchain);
+    gfx::Texture* texture = swapchain->getDepthStencilTexture();
+    CC_ENSURES(texture);
+    return texture;
+}
 
 ResourceGroup::~ResourceGroup() noexcept {
     for (const auto& buffer : instancingBuffers) {
@@ -159,14 +181,19 @@ gfx::TextureViewInfo getTextureViewInfo(const SubresourceView& subresView, gfx::
         subresView.numPlanes,
     };
 }
-} // namespace
 
-bool ManagedTexture::checkResource(const ResourceDesc& desc) const {
+bool isTextureEqual(const gfx::Texture* texture, const ResourceDesc& desc) {
     if (!texture) {
         return false;
     }
     const auto& info = texture->getInfo();
     return desc.width == info.width && desc.height == info.height && desc.format == info.format;
+}
+
+} // namespace
+
+bool ManagedTexture::checkResource(const ResourceDesc& desc) const {
+    return isTextureEqual(texture.get(), desc);
 }
 
 void ResourceGraph::validateSwapchains() {
@@ -185,18 +212,53 @@ void ResourceGraph::validateSwapchains() {
     }
 }
 
+namespace {
+
+std::pair<SubresourceView, ResourceGraph::vertex_descriptor>
+getOriginView(const ResourceGraph& resg, ResourceGraph::vertex_descriptor vertID) {
+    // copy origin view
+    SubresourceView originView = get<SubresourceView>(vertID, resg);
+    auto parentID = parent(vertID, resg);
+    CC_EXPECTS(parentID != resg.null_vertex());
+    while (resg.isTextureView(parentID)) {
+        const auto& prtView = get(SubresourceViewTag{}, parentID, resg);
+        originView.firstPlane += prtView.firstPlane;
+        originView.firstArraySlice += prtView.firstArraySlice;
+        originView.indexOrFirstMipLevel += prtView.indexOrFirstMipLevel;
+        parentID = parent(parentID, resg);
+    }
+    CC_EXPECTS(parentID != resg.null_vertex());
+    CC_EXPECTS(resg.isTexture(parentID));
+    CC_ENSURES(!resg.isTextureView(parentID));
+    return {originView, parentID};
+}
+
+void recreateTextureView(
+    gfx::Device* device,
+    ResourceGraph& resg,
+    const SubresourceView& originView,
+    ResourceGraph::vertex_descriptor parentID,
+    SubresourceView& view) {
+    const auto& desc = get(ResourceGraph::DescTag{}, resg, parentID);
+    auto textureViewInfo = getTextureViewInfo(originView, desc.viewType);
+    const auto& parentTexture = resg.getTexture(parentID);
+    CC_EXPECTS(parentTexture);
+    textureViewInfo.texture = parentTexture;
+    view.textureView = device->createTexture(textureViewInfo);
+}
+
+} // namespace
+
 // NOLINTNEXTLINE(misc-no-recursion)
 void ResourceGraph::mount(gfx::Device* device, vertex_descriptor vertID) {
-    std::ignore = device;
-    auto& resg = *this;
-    const auto& desc = get(ResourceGraph::DescTag{}, *this, vertID);
     visitObject(
-        vertID, resg,
+        vertID, *this,
         [&](const ManagedResource& resource) {
             // to be removed
         },
         [&](ManagedBuffer& buffer) {
             if (!buffer.buffer) {
+                const auto& desc = get(ResourceGraph::DescTag{}, *this, vertID);
                 auto info = getBufferInfo(desc);
                 buffer.buffer = device->createBuffer(info);
             }
@@ -204,9 +266,20 @@ void ResourceGraph::mount(gfx::Device* device, vertex_descriptor vertID) {
             buffer.fenceValue = nextFenceValue;
         },
         [&](ManagedTexture& texture) {
+            const auto& desc = get(ResourceGraph::DescTag{}, *this, vertID);
             if (!texture.checkResource(desc)) {
                 auto info = getTextureInfo(desc);
                 texture.texture = device->createTexture(info);
+                // recreate depth stencil views, currently is not recursive
+                for (const auto& e : makeRange(children(vertID, *this))) {
+                    const auto childID = child(e, *this);
+                    auto* view = get_if<SubresourceView>(childID, this);
+                    if (view) {
+                        const auto [originView, parentID] = getOriginView(*this, childID);
+                        CC_ENSURES(parentID == vertID);
+                        recreateTextureView(device, *this, originView, parentID, *view);
+                    }
+                }
             }
             CC_ENSURES(texture.texture);
             texture.fenceValue = nextFenceValue;
@@ -231,6 +304,7 @@ void ResourceGraph::mount(gfx::Device* device, vertex_descriptor vertID) {
         },
         [&](const FormatView& view) { // NOLINT(misc-no-recursion)
             std::ignore = view;
+            auto& resg = *this;
             auto parentID = parent(vertID, resg);
             CC_EXPECTS(parentID != resg.null_vertex());
             while (resg.isTextureView(parentID)) {
@@ -242,26 +316,12 @@ void ResourceGraph::mount(gfx::Device* device, vertex_descriptor vertID) {
             mount(device, parentID);
         },
         [&](SubresourceView& view) { // NOLINT(misc-no-recursion)
-            SubresourceView originView = view;
-            auto parentID = parent(vertID, resg);
-            CC_EXPECTS(parentID != resg.null_vertex());
-            while (resg.isTextureView(parentID)) {
-                const auto& prtView = get(SubresourceViewTag{}, parentID, resg);
-                originView.firstPlane += prtView.firstPlane;
-                originView.firstArraySlice += prtView.firstArraySlice;
-                originView.indexOrFirstMipLevel += prtView.indexOrFirstMipLevel;
-                parentID = parent(parentID, resg);
-            }
-            CC_EXPECTS(parentID != resg.null_vertex());
-            CC_EXPECTS(resg.isTexture(parentID));
-            CC_ENSURES(!resg.isTextureView(parentID));
+            auto& resg = *this;
+            const auto [originView, parentID] = getOriginView(resg, vertID);
             mount(device, parentID); // NOLINT(misc-no-recursion)
-            auto* parentTexture = resg.getTexture(parentID);
-            if (!view.textureView) {
-                const auto& desc = get(ResourceGraph::DescTag{}, resg, vertID);
-                auto textureViewInfo = getTextureViewInfo(originView, desc.viewType);
-                textureViewInfo.texture = parentTexture;
-                view.textureView = device->createTexture(textureViewInfo);
+            const auto& desc = get(ResourceGraph::DescTag{}, *this, vertID);
+            if (!isTextureEqual(view.textureView, desc)) {
+                recreateTextureView(device, *this, originView, parentID, view);
             }
         });
 }
@@ -345,46 +405,38 @@ gfx::Buffer* ResourceGraph::getBuffer(vertex_descriptor resID) {
 }
 
 gfx::Texture* ResourceGraph::getTexture(vertex_descriptor resID) {
-    gfx::Texture* texture = nullptr;
-    visitObject(
+    gfx::Texture* texture = visitObject(
         resID, *this,
-        [&](const ManagedTexture& res) {
-            texture = res.texture.get();
+        [](const ManagedTexture& res) -> gfx::Texture* {
+            return res.texture.get();
         },
-        [&](const IntrusivePtr<gfx::Texture>& tex) {
-            texture = tex.get();
+        [](const IntrusivePtr<gfx::Texture>& tex) -> gfx::Texture* {
+            return tex.get();
         },
-        [&](const IntrusivePtr<gfx::Framebuffer>& fb) {
+        [](const IntrusivePtr<gfx::Framebuffer>& fb) -> gfx::Texture* {
             // deprecated
             CC_EXPECTS(false);
             CC_EXPECTS(fb->getColorTextures().size() == 1);
             CC_EXPECTS(fb->getColorTextures().at(0));
-            texture = fb->getColorTextures()[0];
+            return fb->getColorTextures()[0];
         },
-        [&](const RenderSwapchain& sc) {
-            if (sc.swapchain) {
-                texture = sc.swapchain->getColorTexture();
-            } else {
-                CC_EXPECTS(sc.renderWindow);
-                const auto& fb = sc.renderWindow->getFramebuffer();
-                CC_EXPECTS(fb);
-                CC_EXPECTS(fb->getColorTextures().size() == 1);
-                CC_EXPECTS(fb->getColorTextures().at(0));
-                texture = fb->getColorTextures()[0];
-            }
+        [](const RenderSwapchain& sc) -> gfx::Texture* {
+            return sc.texture;
         },
-        [&](const FormatView& view) {
+        [](const FormatView& view) -> gfx::Texture* {
             // TODO(zhouzhenglong): add ImageView support
             std::ignore = view;
             CC_EXPECTS(false);
+            return nullptr;
         },
-        [&](const SubresourceView& view) {
+        [](const SubresourceView& view) -> gfx::Texture* {
             // TODO(zhouzhenglong): add ImageView support
-            texture = view.textureView;
+            return view.textureView;
         },
-        [&](const auto& buffer) {
+        [](const auto& buffer) -> gfx::Texture* {
             std::ignore = buffer;
             CC_EXPECTS(false);
+            return nullptr;
         });
     CC_ENSURES(texture);
 

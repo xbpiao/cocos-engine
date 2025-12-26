@@ -22,28 +22,29 @@
  THE SOFTWARE.
 */
 
-import { EDITOR } from 'internal:constants';
+import zlib from '../../../external/compression/zlib.min';
 import { BasicPipeline, PipelineBuilder } from './pipeline';
 import { WebPipeline } from './web-pipeline';
 import { macro } from '../../core/platform/macro';
-import { DeferredPipelineBuilder, ForwardPipelineBuilder } from './builtin-pipelines';
-import { CustomPipelineBuilder, TestPipelineBuilder } from './custom-pipeline';
 import { LayoutGraphData, loadLayoutGraphData } from './layout-graph';
 import { BinaryInputArchive } from './binary-archive';
 import { WebProgramLibrary } from './web-program-library';
 import { Device } from '../../gfx';
 import { initializeLayoutGraphData, terminateLayoutGraphData, getCustomPassID, getCustomPhaseID, getCustomSubpassID } from './layout-graph-utils';
 import { ProgramLibrary } from './private';
-import { PostProcessBuilder } from '../post-process/post-process-builder';
+import { forceResizeAllWindows } from './framework';
 
 let _pipeline: WebPipeline | null = null;
 
 export const INVALID_ID = 0xFFFFFFFF;
 const defaultLayoutGraph = new LayoutGraphData();
 
+const LAYOUT_HEADER_SIZE = 8;
+
 export * from './types';
 export * from './pipeline';
 export * from './archive';
+export * from './framework';
 
 export const enableEffectImport = true;
 export const programLib: ProgramLibrary = new WebProgramLibrary(defaultLayoutGraph);
@@ -63,32 +64,34 @@ export const customPipelineBuilderMap = new Map<string, PipelineBuilder>();
 
 export function setCustomPipeline (name: string, builder: PipelineBuilder): void {
     customPipelineBuilderMap.set(name, builder);
+    forceResizeAllWindows();
 }
+
 export function getCustomPipeline (name: string): PipelineBuilder {
     let builder = customPipelineBuilderMap.get(name);
     if (!builder) {
-        if (name === 'Test') {
-            builder = new TestPipelineBuilder(_pipeline!.pipelineSceneData);
-            customPipelineBuilderMap.set('Test', builder);
-        } else {
-            builder = customPipelineBuilderMap.get('Forward')!;
-        }
+        builder = customPipelineBuilderMap.get('Forward')!;
     }
     return builder;
 }
 
-function addCustomBuiltinPipelines (map: Map<string, PipelineBuilder>): void {
-    map.set('Forward', new PostProcessBuilder());
-    map.set('Deferred', new DeferredPipelineBuilder());
-    map.set('Deprecated', new CustomPipelineBuilder());
-}
-
-addCustomBuiltinPipelines(customPipelineBuilderMap);
-
 export function init (device: Device, arrayBuffer: ArrayBuffer | null): void {
-    if (arrayBuffer) {
-        const readBinaryData = new BinaryInputArchive(arrayBuffer);
-        loadLayoutGraphData(readBinaryData, defaultLayoutGraph);
+    if (arrayBuffer && arrayBuffer.byteLength >= LAYOUT_HEADER_SIZE) {
+        // On bytedance emulator, arrayBuffer might be Uint8Array
+        // Here we use uint8Array to erase the difference.
+        const uint8Array = new Uint8Array(arrayBuffer);
+        const header = new DataView(uint8Array.buffer, uint8Array.byteOffset, LAYOUT_HEADER_SIZE);
+        if (header.getUint32(0) === INVALID_ID) {
+            // Data is compressed
+            const inflator = new zlib.Inflate(new Uint8Array(uint8Array.buffer, uint8Array.byteOffset + LAYOUT_HEADER_SIZE));
+            const decompressed = inflator.decompress() as Uint8Array;
+            const readBinaryData = new BinaryInputArchive(decompressed.buffer, decompressed.byteOffset);
+            loadLayoutGraphData(readBinaryData, defaultLayoutGraph);
+        } else {
+            // Data is not compressed
+            const readBinaryData = new BinaryInputArchive(uint8Array.buffer, uint8Array.byteOffset);
+            loadLayoutGraphData(readBinaryData, defaultLayoutGraph);
+        }
     }
     initializeLayoutGraphData(device, defaultLayoutGraph);
 }

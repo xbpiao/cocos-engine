@@ -2,320 +2,151 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
     "definitions": {
-        "BaseItem": {
+        "CategoryInfo": {
             "additionalProperties": false,
             "properties": {
-                "category": {
-                    "type": "string"
-                },
-                "default": {
-                    "items": {
-                        "type": "string"
-                    },
-                    "type": "array"
+                "checkable": {
+                    "type": "boolean"
                 },
                 "description": {
-                    "description": "Description.",
                     "type": "string"
-                },
-                "flags": {
-                    "$ref": "#/definitions/Record<string,FlagBaseItem>"
                 },
                 "label": {
-                    "description": "Display text.",
-                    "type": "string"
-                },
-                "native": {
                     "type": "string"
                 },
                 "required": {
                     "type": "boolean"
-                },
-                "wechatPlugin": {
-                    "type": "boolean"
-                },
-                "taobaoMinigamePlugin": {
-                    "type": "boolean"
-                }
-            },
-            "type": "object"
-        },
-        "CategoryInfo": {
-            "additionalProperties": false,
-            "properties": {
-                "description": {
-                    "type": "string"
-                },
-                "label": {
-                    "type": "string"
                 }
             },
             "type": "object"
         },
         "Features": {
-            "additionalProperties": false,
-            "properties": {
-                "2d": {
-                    "$ref": "#/definitions/Item"
-                },
-                "3d": {
-                    "$ref": "#/definitions/Item"
-                },
-                "animation": {
-                    "$ref": "#/definitions/Item"
-                },
-                "audio": {
-                    "$ref": "#/definitions/Item"
-                },
-                "base": {
-                    "$ref": "#/definitions/Item"
-                },
-                "dragon-bones": {
-                    "$ref": "#/definitions/Item"
-                },
-                "gfx-webgl": {
-                    "$ref": "#/definitions/Item"
-                },
-                "gfx-webgl2": {
-                    "$ref": "#/definitions/Item"
-                },
-                "gfx-webgpu": {
-                    "$ref": "#/definitions/Item"
-                },
-                "graphcis": {
-                    "$ref": "#/definitions/Item"
-                },
-                "intersection-2d": {
-                    "$ref": "#/definitions/Item"
-                },
-                "marionette": {
-                    "$ref": "#/definitions/Item"
-                },
-                "particle": {
-                    "$ref": "#/definitions/Item"
-                },
-                "particle-2d": {
-                    "$ref": "#/definitions/Item"
-                },
-                "physics": {
-                    "$ref": "#/definitions/Item"
-                },
-                "physics-2d": {
-                    "$ref": "#/definitions/Item"
-                },
-                "physics-2d-box2d": {
-                    "$ref": "#/definitions/Item"
-                },
-                "physics-2d-builtin": {
-                    "$ref": "#/definitions/Item"
-                },
-                "physics-2d-box2d-wasm": {
-                    "$ref": "#/definitions/Item"
-                },
-                "physics-ammo": {
-                    "$ref": "#/definitions/Item"
-                },
-                "physics-builtin": {
-                    "$ref": "#/definitions/Item"
-                },
-                "physics-cannon": {
-                    "$ref": "#/definitions/Item"
-                },
-                "physics-physx": {
-                    "$ref": "#/definitions/Item"
-                },
-                "primitive": {
-                    "$ref": "#/definitions/Item"
-                },
-                "profiler": {
-                    "$ref": "#/definitions/Item"
-                },
-                "skeletal-animation": {
-                    "$ref": "#/definitions/Item"
-                },
-                "spine": {
-                    "$ref": "#/definitions/Item"
-                },
-                "terrain": {
-                    "$ref": "#/definitions/Item"
-                },
-                "tiled-map": {
-                    "$ref": "#/definitions/Item"
-                },
-                "tween": {
-                    "$ref": "#/definitions/Item"
-                },
-                "ui": {
-                    "$ref": "#/definitions/Item"
-                },
-                "video": {
-                    "$ref": "#/definitions/Item"
-                },
-                "webview": {
-                    "$ref": "#/definitions/Item"
-                },
-                "xr": {
-                    "$ref": "#/definitions/Item"
-                }
+            "additionalProperties": {
+                "$ref": "#/definitions/IModuleItem"
             },
             "type": "object"
         },
-        "Item": {
+        "IFeatureGroup": {
             "additionalProperties": false,
             "properties": {
                 "category": {
                     "type": "string"
                 },
                 "default": {
+                    "type": "boolean"
+                },
+                "dependencies": {
                     "items": {
                         "type": "string"
                     },
                     "type": "array"
                 },
                 "description": {
-                    "description": "Description.",
                     "type": "string"
                 },
-                "flags": {
-                    "$ref": "#/definitions/Record<string,FlagBaseItem>"
-                },
-                "label": {
-                    "description": "Display text.",
-                    "type": "string"
-                },
-                "multi": {
-                    "description": "Whether if the feature of options allow multiple selection.",
+                "hidden": {
                     "type": "boolean"
                 },
-                "native": {
+                "label": {
                     "type": "string"
                 },
                 "options": {
-                    "$ref": "#/definitions/Record<EngineFeature,BaseItem>"
+                    "additionalProperties": {
+                        "$ref": "#/definitions/IFeatureItem"
+                    },
+                    "type": "object"
+                },
+                "readonly": {
+                    "type": "boolean"
                 },
                 "required": {
                     "type": "boolean"
-                },
-                "wechatPlugin": {
-                    "type": "boolean"
-                },
-                "taobaoMinigamePlugin": {
-                    "type": "boolean"
                 }
             },
             "type": "object"
         },
-        "Record<EngineFeature,BaseItem>": {
+        "IFeatureItem": {
             "additionalProperties": false,
             "properties": {
-                "2d": {
-                    "$ref": "#/definitions/BaseItem"
+                "category": {
+                    "type": "string"
                 },
-                "3d": {
-                    "$ref": "#/definitions/BaseItem"
+                "cmakeConfig": {
+                    "type": "string"
                 },
-                "animation": {
-                    "$ref": "#/definitions/BaseItem"
+                "default": {
+                    "type": "boolean"
                 },
-                "audio": {
-                    "$ref": "#/definitions/BaseItem"
+                "dependencies": {
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
                 },
-                "base": {
-                    "$ref": "#/definitions/BaseItem"
+                "description": {
+                    "type": "string"
                 },
-                "dragon-bones": {
-                    "$ref": "#/definitions/BaseItem"
+                "enginePlugin": {
+                    "type": "boolean"
                 },
-                "gfx-webgl": {
-                    "$ref": "#/definitions/BaseItem"
+                "envCondition": {
+                    "type": "string"
                 },
-                "gfx-webgl2": {
-                    "$ref": "#/definitions/BaseItem"
+                "fallback": {
+                    "type": "string"
                 },
-                "gfx-webgpu": {
-                    "$ref": "#/definitions/BaseItem"
+                "flags": {
+                    "additionalProperties": {
+                        "additionalProperties": false,
+                        "properties": {
+                            "default": {
+                                "type": "boolean"
+                            },
+                            "description": {
+                                "type": "string"
+                            },
+                            "label": {
+                                "type": "string"
+                            },
+                            "ui-type": {
+                                "enum": [
+                                    "checkbox",
+                                    "select"
+                                ],
+                                "type": "string"
+                            }
+                        },
+                        "type": "object"
+                    },
+                    "type": "object"
                 },
-                "graphcis": {
-                    "$ref": "#/definitions/BaseItem"
+                "hidden": {
+                    "type": "boolean"
                 },
-                "intersection-2d": {
-                    "$ref": "#/definitions/BaseItem"
+                "isNativeModule": {
+                    "type": "boolean"
                 },
-                "marionette": {
-                    "$ref": "#/definitions/BaseItem"
+                "label": {
+                    "type": "string"
                 },
-                "particle": {
-                    "$ref": "#/definitions/BaseItem"
+                "readonly": {
+                    "type": "boolean"
                 },
-                "particle-2d": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "physics": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "physics-2d": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "physics-2d-box2d": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "physics-2d-builtin": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "physics-2d-box2d-wasm": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "physics-ammo": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "physics-builtin": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "physics-cannon": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "physics-physx": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "primitive": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "profiler": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "skeletal-animation": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "spine": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "terrain": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "tiled-map": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "tween": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "ui": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "video": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "webview": {
-                    "$ref": "#/definitions/BaseItem"
-                },
-                "xr": {
-                    "$ref": "#/definitions/BaseItem"
+                "required": {
+                    "type": "boolean"
                 }
             },
             "type": "object"
         },
-        "Record<string,FlagBaseItem>": {
-            "additionalProperties": false,
-            "type": "object"
+        "IModuleItem": {
+            "anyOf": [
+                {
+                    "$ref": "#/definitions/IFeatureItem"
+                },
+                {
+                    "$ref": "#/definitions/IFeatureGroup"
+                }
+            ]
         }
     },
     "properties": {
@@ -332,7 +163,15 @@
         "features": {
             "$ref": "#/definitions/Features",
             "description": "The modules info"
+        },
+        "migrationScript": {
+            "description": "The script to migrate, this script should export a const migrations: Migration[]`.",
+            "type": "string"
+        },
+        "version": {
+            "type": "string"
         }
     },
     "type": "object"
 }
+

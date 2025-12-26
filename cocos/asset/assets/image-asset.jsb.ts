@@ -22,7 +22,7 @@
  THE SOFTWARE.
 */
 
-import { ALIPAY, XIAOMI, JSB, TEST, BAIDU, EDITOR } from 'internal:constants';
+import { ALIPAY, XIAOMI, JSB, TEST, EDITOR } from 'internal:constants';
 import { Format, FormatFeatureBit, deviceManager } from '../../gfx';
 import { PixelFormat } from './asset-enum';
 import { sys, macro, warnID, cclegacy } from '../../core';
@@ -54,7 +54,7 @@ function isImageBitmap (imageSource: any): boolean {
 }
 
 function isNativeImage (imageSource: ImageSource): imageSource is (HTMLImageElement | HTMLCanvasElement | ImageBitmap) {
-    if (ALIPAY || XIAOMI || BAIDU) {
+    if (ALIPAY || XIAOMI) {
         // We're unable to grab the constructors of Alipay native image or canvas object.
         return !('_data' in imageSource);
     }
@@ -125,10 +125,8 @@ imageAssetProto._setRawAsset = function (filename: string, inLibrary = true) {
 imageAssetProto.reset = function (data: any) {
     this._nativeData = data;
 
-    if (!(data instanceof jsbWindow.HTMLElement)) {
-        if(data.format !== undefined) {
-            this.format = (data as any).format;
-        }
+    if (data.format !== undefined && !this.isFormatFixed()) {
+        this.format = (data as any).format;
     }
     this._syncDataToNative();
 };
@@ -149,7 +147,7 @@ Object.defineProperty(imageAssetProto, 'width', {
     configurable: true,
     enumerable: true,
     get () {
-        return this._nativeData.width || this._width;
+        return this._nativeData?.width || this._width;
     }
 });
 
@@ -157,7 +155,7 @@ Object.defineProperty(imageAssetProto, 'height', {
     configurable: true,
     enumerable: true,
     get () {
-        return this._nativeData.height || this._height;
+        return this._nativeData?.height || this._height;
     }
 });
 
@@ -267,8 +265,7 @@ imageAssetProto._deserialize = function (data: any) {
 
     if (ext) {
         this._setRawAsset(ext);
-        this.format = format;
-        // this._format = format;
+        this.setFixedFormat(format);
     } else {
         warnID(3121);
     }

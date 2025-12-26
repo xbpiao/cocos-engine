@@ -28,22 +28,40 @@ import { basename } from '../../cocos/core/utils/path';
 import { checkPalIntegrity, withImpl } from '../integrity-check';
 import { log } from '../../cocos/core/platform/debug';
 
+// NOTE: The global variable `CCWebAssembly` is assigned in platforms/(bytedance|wechat)/wrapper/builtin/index.js
+declare namespace CCWebAssembly {
+    // The first argument of `instantiate` function in mini-game platforms is always a wasm url.
+    function instantiate(url: string, importObject?: WebAssembly.Imports): Promise<WebAssembly.WebAssemblyInstantiatedSource>;
+}
+
 export function instantiateWasm (wasmUrl: string, importObject: WebAssembly.Imports): Promise<any> {
-    return getPlatformBinaryUrl(wasmUrl).then((url) => WebAssembly.instantiate(url, importObject));
+    return getPlatformBinaryUrl(wasmUrl).then((url: string) => CCWebAssembly.instantiate(url, importObject));
 }
 
 export function fetchBuffer (binaryUrl: string): Promise<ArrayBuffer> {
     return new Promise<ArrayBuffer>((resolve, reject) => {
         getPlatformBinaryUrl(binaryUrl).then((url) => {
             // NOTE: fsUtils is defined in engine-adapter, we need to access globalThis explicitly for Taobao platform
-            globalThis.fsUtils.readArrayBuffer(url, (err, arrayBuffer) => {
+            globalThis.fsUtils.readArrayBuffer(url, (err, arrayBuffer: ArrayBuffer) => {
                 if (err) {
                     reject(err);
                     return;
                 }
                 resolve(arrayBuffer);
             });
+        // eslint-disable-next-line @typescript-eslint/no-empty-function
         }).catch((e) => {});
+    });
+}
+
+export function fetchUrl (binaryUrl: string): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+        getPlatformBinaryUrl(binaryUrl).then((url) => {
+            resolve(url);
+        // eslint-disable-next-line @typescript-eslint/no-empty-function
+        }).catch((e) => {
+            reject(e);
+        });
     });
 }
 
@@ -101,11 +119,7 @@ function getPlatformBinaryUrl (binaryUrl: string): Promise<string> {
         if (XIAOMI) {
             resolve(`src/cocos-js/${binaryUrl}`);
         } if (TAOBAO_MINIGAME && WASM_SUBPACKAGE) {
-            if (minigame.isDevTool) {
-                resolve(`cocos-js/${binaryUrl}`);
-            } else {
-                resolve(`__ccWasmAssetSubpkg__/${basename(binaryUrl)}`);
-            }
+            resolve(`__ccWasmAssetSubpkg__/${basename(binaryUrl)}`);
         } else {
             resolve(`cocos-js/${binaryUrl}`);
         }

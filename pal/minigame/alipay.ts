@@ -92,10 +92,14 @@ minigame.createInnerAudioContext = function (): InnerAudioContext {
     // NOTE: `onCanPlay` and `offCanPlay` is not standard minigame interface,
     // so here we mark audio as type of any
     const audio: any = polyfilledCreateInnerAudio();
-    audio.onCanplay = audio.onCanPlay.bind(audio);
-    audio.offCanplay = audio.offCanPlay.bind(audio);
-    delete audio.onCanPlay;
-    delete audio.offCanPlay;
+    if (audio.onCanPlay) {
+        audio.onCanplay = audio.onCanPlay.bind(audio);
+        delete audio.onCanPlay;
+    }
+    if (audio.offCanPlay) {
+        audio.offCanplay = audio.offCanPlay.bind(audio);
+        delete audio.offCanPlay;
+    }
     return audio as InnerAudioContext;
 };
 
@@ -150,10 +154,10 @@ minigame.getSafeArea = function (): SafeArea {
     return {
         top: 0,
         left: 0,
-        bottom: systemInfo.screenHeight,
-        right: systemInfo.screenWidth,
-        width: systemInfo.screenWidth,
-        height: systemInfo.screenHeight,
+        bottom: systemInfo.windowHeight,
+        right: systemInfo.windowWidth,
+        width: systemInfo.windowWidth,
+        height: systemInfo.windowHeight,
     };
 };
 // #endregion SafeArea

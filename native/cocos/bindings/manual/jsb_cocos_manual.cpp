@@ -24,11 +24,14 @@
 
 #include "jsb_cocos_manual.h"
 
+#include "base/ThreadPool.h"
+#include "base/UTF8.h"
+
+#include "bindings/auto/jsb_cocos_auto.h"
+#include "bindings/jswrapper/SeApi.h"
+#include "bindings/manual/jsb_conversions.h"
 #include "bindings/manual/jsb_global.h"
-#include "cocos/bindings/auto/jsb_cocos_auto.h"
-#include "cocos/bindings/jswrapper/SeApi.h"
-#include "cocos/bindings/manual/jsb_conversions.h"
-#include "cocos/bindings/manual/jsb_global_init.h"
+#include "bindings/manual/jsb_global_init.h"
 
 #include "application/ApplicationManager.h"
 #include "platform/interfaces/modules/ISystemWindowManager.h"
@@ -353,7 +356,7 @@ static bool register_sys_localStorage(se::Object *obj) { // NOLINT(readability-i
     return true;
 }
 
-//IDEA:  move to auto bindings.
+// IDEA:  move to auto bindings.
 static bool js_CanvasRenderingContext2D_setCanvasBufferUpdatedCallback(se::State &s) { // NOLINT(readability-identifier-naming)
     auto *cobj = static_cast<cc::ICanvasRenderingContext2D *>(s.nativeThisObject());
     SE_PRECONDITION2(cobj, false, "Invalid Native Object");
@@ -388,7 +391,7 @@ static bool js_CanvasRenderingContext2D_setCanvasBufferUpdatedCallback(se::State
                     thisObj->unroot();
                 }
                 jsFunc.toObject()->unroot();
-                arg0 = lambda;
+                arg0 = std::move(lambda);
             } else {
                 arg0 = nullptr;
             }
@@ -650,7 +653,7 @@ static bool js_se_setExceptionCallback(se::State &s) { // NOLINT(readability-ide
     if (s.thisObject()) {
         s.thisObject()->attachObject(objFunc); // prevent GC
     } else {
-        //prevent GC in C++ & JS
+        // prevent GC in C++ & JS
         objFunc->root();
     }
 
@@ -672,8 +675,167 @@ static bool js_se_setExceptionCallback(se::State &s) { // NOLINT(readability-ide
 }
 SE_BIND_FUNC(js_se_setExceptionCallback) // NOLINT(readability-identifier-naming)
 
+static bool js_readFile_getParameters(se::State &s, ccstd::string &fullPath, std::shared_ptr<se::Value> &callbackPtr) { // NOLINT
+    const auto &args = s.args();
+    size_t argc = args.size();
+    CC_UNUSED bool ok = true;
+    if (argc == 2) {
+        ccstd::string path;
+        ok &= sevalue_to_native(args[0], &path);
+        SE_PRECONDITION2(ok, false, "Error processing arguments");
+
+        const auto &callbackVal = args[1];
+        CC_ASSERT(callbackVal.isObject());
+        CC_ASSERT(callbackVal.toObject()->isFunction());
+
+        if (path.empty()) {
+            se::ValueArray seArgs;
+            seArgs.reserve(2);
+            seArgs.emplace_back(se::Value("Path is empty"));
+            seArgs.emplace_back(se::Value::Null);
+            callbackVal.toObject()->call(seArgs, nullptr);
+            return true;
+        }
+
+        callbackPtr = std::make_shared<se::Value>(callbackVal);
+
+        // fullPathForFilename is not threadsafe, so don't invoke it in thread pool.
+        fullPath = cc::FileUtils::getInstance()->fullPathForFilename(path);
+        return true;
+    }
+    SE_REPORT_ERROR("wrong number of arguments: %d, was expecting %d", (int)argc, 2);
+    return false;
+}
+
+template <typename T, bool isJson>
+struct ReadFileDoJobReturnType {
+    using value = std::shared_ptr<T>;
+};
+
+template <>
+struct ReadFileDoJobReturnType<ccstd::string, true> {
+#if SCRIPT_ENGINE_TYPE == SCRIPT_ENGINE_NAPI
+    using value = std::shared_ptr<ccstd::string>;
+#else
+    using value = std::shared_ptr<std::u16string>;
+#endif
+};
+
+template <>
+struct ReadFileDoJobReturnType<ccstd::string, false> {
+    using value = std::shared_ptr<ccstd::string>;
+};
+
+template <typename T, bool isJson>
+static bool js_readFile_doJob(const ccstd::string &fullPath, typename ReadFileDoJobReturnType<T, isJson>::value &outValue) {
+    auto *fs = cc::FileUtils::getInstance();
+    if (fs == nullptr) {
+        return false;
+    }
+
+    auto content = std::make_shared<T>();
+    if (cc::FileUtils::Status::OK != fs->getContents(fullPath, content.get())) {
+        return false;
+    }
+
+
+    if constexpr (std::is_same_v<T, ccstd::string> && isJson) {
+// TODO(cjh): OpenHarmony NAPI support
+#if SCRIPT_ENGINE_TYPE != SCRIPT_ENGINE_NAPI
+        auto u16str = std::make_shared<std::u16string>();
+        if (!cc::StringUtils::UTF8ToUTF16(*content, *u16str)) {
+            CC_LOG_ERROR("UTF8ToUTF16 failed, file: %s", fullPath.c_str());
+            return false;
+        }
+        outValue = u16str;
+#endif
+    } else {
+        outValue = content;
+    }
+
+    return true;
+}
+
+template <typename T, bool isJson>
+static void js_readFile_invokeCallback(bool doJobSucceed, const typename ReadFileDoJobReturnType<T, isJson>::value &content, const std::shared_ptr<se::Value> &callbackPtr) {
+    se::AutoHandleScope hs;
+    se::ValueArray seArgs;
+    seArgs.reserve(2);
+
+    if (!doJobSucceed) {
+        seArgs.emplace_back(se::Value("readFile failed!"));
+        seArgs.emplace_back(se::Value::Null);
+        callbackPtr->toObject()->call(seArgs, nullptr);
+        return;
+    }
+
+    static_assert(std::is_same_v<T, ccstd::string> || std::is_same_v<T, cc::Data>, "No supported type!");
+
+    if constexpr (std::is_same_v<T, ccstd::string>) {
+        if constexpr (isJson) {
+#if SCRIPT_ENGINE_TYPE == SCRIPT_ENGINE_NAPI
+            se::HandleObject jsonObj(se::Object::createJSONObject(*content));
+#else
+            se::HandleObject jsonObj(se::Object::createJSONObject(std::move(*content)));
+#endif
+            if (!jsonObj.get()) {
+                seArgs.emplace_back(se::Value("Parse json failed!"));
+                seArgs.emplace_back(se::Value::Null);
+            } else {
+                seArgs.emplace_back(se::Value::Null);
+                seArgs.emplace_back(se::Value(jsonObj));
+            }
+            callbackPtr->toObject()->call(seArgs, nullptr);
+        } else {
+            seArgs.emplace_back(se::Value::Null);
+            seArgs.emplace_back(se::Value(*content));
+            callbackPtr->toObject()->call(seArgs, nullptr);
+        }
+    } else if constexpr (std::is_same_v<T, cc::Data>) {
+        se::HandleObject dataObj(se::Object::createArrayBufferObject(content->getBytes(), content->getSize()));
+        seArgs.emplace_back(se::Value::Null);
+        seArgs.emplace_back(se::Value(dataObj));
+        callbackPtr->toObject()->call(seArgs, nullptr);
+    }
+}
+
+#define JSB_READ_FILE(funcName, type, isJson)                                                             \
+    static bool funcName(se::State &s) {                                                                  \
+        ccstd::string fullPath;                                                                           \
+        std::shared_ptr<se::Value> callbackPtr;                                                           \
+        bool ok = js_readFile_getParameters(s, fullPath, callbackPtr);                                    \
+        if (!ok) return false;                                                                            \
+                                                                                                          \
+        gIOThreadPool->pushTask([fullPath, callbackPtr](int /* tid */) {                                  \
+            ReadFileDoJobReturnType<type, isJson>::value content;                                         \
+            bool doJobSucceed = js_readFile_doJob<type, isJson>(fullPath, content);                       \
+            auto app = CC_CURRENT_APPLICATION();                                                          \
+            if (!app) {                                                                                   \
+                return;                                                                                   \
+            }                                                                                             \
+            auto engine = app->getEngine();                                                               \
+            if (!engine) {                                                                                \
+                return;                                                                                   \
+            }                                                                                             \
+            engine->getScheduler()->performFunctionInCocosThread([doJobSucceed, content, callbackPtr]() { \
+                js_readFile_invokeCallback<type, isJson>(doJobSucceed, content, callbackPtr);             \
+            });                                                                                           \
+        });                                                                                               \
+                                                                                                          \
+        return true;                                                                                      \
+    }                                                                                                     \
+    SE_BIND_FUNC(funcName)
+
+JSB_READ_FILE(js_readTextFile, ccstd::string, false)
+JSB_READ_FILE(js_readJsonFile, ccstd::string, true)
+JSB_READ_FILE(js_readDataFile, cc::Data, false)
+
 static bool register_filetuils_ext(se::Object * /*obj*/) { // NOLINT(readability-identifier-naming)
     __jsb_cc_FileUtils_proto->defineFunction("listFilesRecursively", _SE(js_engine_FileUtils_listFilesRecursively));
+    __jsb_cc_FileUtils_proto->defineFunction("readTextFile", _SE(js_readTextFile));
+    __jsb_cc_FileUtils_proto->defineFunction("readDataFile", _SE(js_readDataFile));
+    __jsb_cc_FileUtils_proto->defineFunction("readJsonFile", _SE(js_readJsonFile));
+
     return true;
 }
 
@@ -689,44 +851,56 @@ static bool register_se_setExceptionCallback(se::Object *obj) { // NOLINT(readab
     return true;
 }
 
-static bool js_engine_Color_get_val(se::State &s) // NOLINT(readability-identifier-naming)
+static bool js_engine_Color_get_data(se::State &s) // NOLINT(readability-identifier-naming)
 {
     auto *cobj = SE_THIS_OBJECT<cc::Color>(s);
     SE_PRECONDITION2(cobj, false, "Invalid Native Object");
 
     CC_UNUSED bool ok = true;
     se::Value jsret;
-    auto r = static_cast<uint32_t>(cobj->r);
-    auto g = static_cast<uint32_t>(cobj->g);
-    auto b = static_cast<uint32_t>(cobj->b);
-    auto a = static_cast<uint32_t>(cobj->a);
-    uint32_t val = (a << 24) + (b << 16) + (g << 8) + r;
-    ok &= nativevalue_to_se(val, jsret, s.thisObject() /*ctx*/);
-    s.rval() = jsret;
+    uint8_t data[4] = {
+        static_cast<uint8_t>(cobj->r),
+        static_cast<uint8_t>(cobj->g),
+        static_cast<uint8_t>(cobj->b),
+        static_cast<uint8_t>(cobj->a)};
+    se::HandleObject dataObj(se::Object::createTypedArray(se::Object::TypedArrayType::UINT8_CLAMPED,
+                                                          data, sizeof(uint8_t) * 4));
+    SE_PRECONDITION2(dataObj != nullptr, false, "Can not create Uint8ClampedTypedArray");
+
+    s.rval() = se::Value(dataObj);
     return true;
 }
-SE_BIND_PROP_GET(js_engine_Color_get_val)
+SE_BIND_PROP_GET(js_engine_Color_get_data)
 
-static bool js_engine_Color_set_val(se::State &s) // NOLINT(readability-identifier-naming)
+static bool js_engine_Color_set_data(se::State &s) // NOLINT(readability-identifier-naming)
 {
     const auto &args = s.args();
     auto *cobj = SE_THIS_OBJECT<cc::Color>(s);
     SE_PRECONDITION2(cobj, false, "Invalid Native Object");
 
     CC_UNUSED bool ok = true;
-    uint32_t val{0};
+
+    se::Value val;
     ok &= sevalue_to_native(args[0], &val, s.thisObject());
-    cobj->r = val & 0x000000FF;
-    cobj->g = (val & 0x0000FF00) >> 8;
-    cobj->b = (val & 0x00FF0000) >> 16;
-    cobj->a = (val & 0xFF000000) >> 24;
-    SE_PRECONDITION2(ok, false, "Error processing new value");
+    ok &= val.isObject() && val.toObject()->isTypedArray();
+    SE_PRECONDITION2(ok, false, "It is not a TypeArray");
+
+    uint8_t *ptr = nullptr;
+    size_t length = 0;
+    val.toObject()->getTypedArrayData(&ptr, &length);
+    SE_PRECONDITION2(length == sizeof(uint8_t) * 4, false, "Invalid TypedArray size");
+
+    cobj->r = ptr[0];
+    cobj->g = ptr[1];
+    cobj->b = ptr[2];
+    cobj->a = ptr[3];
+
     return true;
 }
-SE_BIND_PROP_SET(js_engine_Color_set_val)
+SE_BIND_PROP_SET(js_engine_Color_set_data)
 
 static bool register_engine_Color_manual(se::Object * /*obj*/) { // NOLINT(readability-identifier-naming)
-    __jsb_cc_Color_proto->defineProperty("_val", _SE(js_engine_Color_get_val), _SE(js_engine_Color_set_val));
+    __jsb_cc_Color_proto->defineProperty("_data", _SE(js_engine_Color_get_data), _SE(js_engine_Color_set_data));
 
     se::ScriptEngine::getInstance()->clearException();
 

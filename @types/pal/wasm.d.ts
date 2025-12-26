@@ -7,7 +7,7 @@ declare module 'pal/wasm' {
      * @param wasmUrl the url of wasm, this should be a url relative from build output chunk.
      * @param importObject the standard `WebAssembly.Imports` instance
      */
-    export function instantiateWasm (wasmUrl: string, importObject: WebAssembly.Imports): Promise<any>;
+    export function instantiateWasm (wasmUrl: string, importObject: WebAssembly.Imports): Promise<WebAssembly.WebAssemblyInstantiatedSource>;
 
     /**
      * Fetch binary data from wasm url or js mem url.
@@ -18,6 +18,8 @@ declare module 'pal/wasm' {
      * @param binaryUrl the url of wasm or js mem, this should be a url relative from build output chunk.
      */
     export function fetchBuffer (binaryUrl: string): Promise<ArrayBuffer>;
+
+    export function fetchUrl(binaryUrl: string): Promise<string>;
 
     /**
      * Sometimes we need to put wasm modules in subpackage to reduce code size.

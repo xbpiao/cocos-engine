@@ -72,7 +72,7 @@ export class AudioContextAgent {
     }
 
     public decodeAudioData (audioData: ArrayBuffer): Promise<AudioBuffer> {
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             const promise = this._context.decodeAudioData(audioData, (audioBuffer) => {
                 resolve(audioBuffer);
             }, (err) => {
@@ -80,7 +80,7 @@ export class AudioContextAgent {
                 // eslint-disable-next-line no-console
                 console.error('failed to load Web Audio', err);
             });
-            promise?.catch((e) => { debug.warn('decodeAudioData error', e); });  // Safari doesn't support the promise based decodeAudioData
+            promise?.catch(reject);  // Safari doesn't support the promise based decodeAudioData
         });
     }
 
@@ -95,8 +95,10 @@ export class AudioContextAgent {
                 resolve();
                 return;
             }
-            context.resume().catch((e) => { debug.warn('runContext error', e); });
-            if (context.state === 'running') {
+            // only state is suspended can involve resume function
+            if (context.state === 'suspended') {
+                context.resume().catch((e) => { debug.warn('runContext error', e); });
+            } else if (context.state === 'running') {
                 resolve();
                 return;
             }
@@ -257,10 +259,10 @@ export class AudioPlayerWeb implements OperationQueueable {
         this.offRunning();
     }
     static load (url: string): Promise<AudioPlayerWeb> {
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             AudioPlayerWeb.loadNative(url).then((audioBuffer) => {
                 resolve(new AudioPlayerWeb(audioBuffer, url));
-            }).catch((e) => { debug.warn('load error', url, e); });
+            }).catch(reject);
         });
     }
     static loadNative (url: string): Promise<AudioBuffer> {

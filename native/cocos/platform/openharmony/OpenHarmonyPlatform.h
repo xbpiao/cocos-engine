@@ -29,17 +29,22 @@
 
 #include <ace/xcomponent/native_interface_xcomponent.h>
 
+#include <napi/native_api.h>
 #include <uv.h>
 #include <string>
 #include <unordered_map>
-#include <napi/native_api.h>
 
 #include "platform/openharmony/WorkerMessageQueue.h"
 
 namespace cc {
+#if CC_USE_GAMEPAD
+class OpenHarmonyGamePad;
+#endif
+
 class OpenHarmonyPlatform : public UniversalPlatform {
 public:
     OpenHarmonyPlatform();
+    ~OpenHarmonyPlatform() override;
     int32_t init() override;
     static OpenHarmonyPlatform* getInstance();
 
@@ -48,34 +53,53 @@ public:
     void onHideNative();
     void onDestroyNative();
 
+    void restartJSVM();
     void workerInit(uv_loop_t* loop);
 
     void setNativeXComponent(OH_NativeXComponent* component);
 
     int32_t run(int argc, const char** argv) override;
+    void resume();
+    void pause();
     int32_t loop() override;
 
     void requestVSync();
-    
+
     void enqueue(const WorkerMessageData& data);
+    void enqueueAndWait(WorkerMessageData& data);
     bool dequeue(WorkerMessageData* data);
 
     void triggerMessageSignal();
-    ISystemWindow *createNativeWindow(uint32_t windowId, void *externalHandle) override;
+    ISystemWindow* createNativeWindow(uint32_t windowId, void* externalHandle) override;
+    static void sendMsgToWorker(const cc::MessageType& type, void* data, void* window);
+    static void sendMsgToWorkerAndWait(const cc::MessageType& type, void* data, void* window);
+
 public:
     // Callback, called by ACE XComponent
     void onSurfaceCreated(OH_NativeXComponent* component, void* window);
     void onSurfaceChanged(OH_NativeXComponent* component, void* window);
     void onSurfaceDestroyed(OH_NativeXComponent* component, void* window);
-    
+    void onSurfaceHide();
+    void onSurfaceShow(void* window);
+    void dispatchMouseWheelCB(std::string eventType, float offsetY);
+
     static void onMessageCallback(const uv_async_t* req);
     static void timerCb(uv_timer_t* handle);
 
     OH_NativeXComponent* _component{nullptr};
     OH_NativeXComponent_Callback _callback;
-    uv_timer_t _timerHandle;
+    OH_NativeXComponent_MouseEvent_Callback _mouseCallback{nullptr};
+    uv_timer_t _timerHandle{nullptr};
     uv_loop_t* _workerLoop{nullptr};
     uv_async_t _messageSignal{};
+    bool _timerInited{false};
     WorkerMessageQueue _messageQueue;
+    #if CC_USE_GAMEPAD
+    std::unique_ptr<OpenHarmonyGamePad> _gamePad;
+    #endif
+    // game started
+    bool g_started{false};
+    bool isMouseLeftActive{false};
+    float scrollDistance{0};
 };
 } // namespace cc

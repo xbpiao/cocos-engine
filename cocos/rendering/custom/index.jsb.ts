@@ -1,5 +1,5 @@
 /*
- Copyright (c) 2021-2023 Xiamen Yaji Software Co., Ltd.
+ Copyright (c) 2021-2024 Xiamen Yaji Software Co., Ltd.
 
  https://www.cocos.com/
 
@@ -24,20 +24,22 @@
 
 declare const render: any;
 
+import zlib from '../../../external/compression/zlib.min';
 import { Pipeline, PipelineBuilder, RenderingModule } from './pipeline';
-import { DeferredPipelineBuilder } from './builtin-pipelines';
-import { CustomPipelineBuilder, TestPipelineBuilder } from './custom-pipeline';
 import { Device } from '../../gfx';
-import { PostProcessBuilder } from '../post-process/post-process-builder';
+import { forceResizeAllWindows } from './framework';
 
 export * from './types';
 export * from './pipeline';
 export * from './archive';
+export * from './framework';
 
 let _pipeline: Pipeline | null = null;
 
 export const INVALID_ID = 0xFFFFFFFF;
 export const enableEffectImport = true;
+
+const LAYOUT_HEADER_SIZE = 8;
 
 let _renderModule: RenderingModule;
 
@@ -50,32 +52,29 @@ export const customPipelineBuilderMap = new Map<string, PipelineBuilder>();
 
 export function setCustomPipeline (name: string, builder: PipelineBuilder) {
     customPipelineBuilderMap.set(name, builder);
+    forceResizeAllWindows();
 }
 
 export function getCustomPipeline (name: string): PipelineBuilder {
     let builder = customPipelineBuilderMap.get(name);
     if (!builder) {
-        if (name === 'Test') {
-            builder = new TestPipelineBuilder(_pipeline!.pipelineSceneData);
-            customPipelineBuilderMap.set('Test', builder);
-        } else {
-            builder = customPipelineBuilderMap.get('Forward')!;
-        }
+        builder = customPipelineBuilderMap.get('Forward')!;
     }
     return builder;
 }
 
-function addCustomBuiltinPipelines (map: Map<string, PipelineBuilder>) {
-    map.set('Forward', new PostProcessBuilder());
-    map.set('Deferred', new DeferredPipelineBuilder());
-    map.set('Deprecated', new CustomPipelineBuilder());
-}
-
-addCustomBuiltinPipelines(customPipelineBuilderMap);
-
 export function init (device: Device, arrayBuffer: ArrayBuffer | null) {
-    if (arrayBuffer) {
-        _renderModule = render.Factory.init(device, arrayBuffer);
+    if (arrayBuffer && arrayBuffer.byteLength >= LAYOUT_HEADER_SIZE) {
+        const header = new DataView(arrayBuffer, 0, LAYOUT_HEADER_SIZE);
+        if (header.getUint32(0) === INVALID_ID) {
+            // Data is compressed
+            const inflator = new zlib.Inflate(new Uint8Array(arrayBuffer, LAYOUT_HEADER_SIZE));
+            const decompressed = inflator.decompress() as Uint8Array;
+            _renderModule = render.Factory.init(device, decompressed.buffer);
+        } else {
+            // Data is not compressed
+            _renderModule = render.Factory.init(device, arrayBuffer);
+        }
     } else {
         _renderModule = render.Factory.init(device, new ArrayBuffer(0));
     }

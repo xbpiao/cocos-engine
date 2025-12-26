@@ -25,6 +25,7 @@
 
 #include "Object.h"
 #include "v8/HelperMacros.h"
+#include "application/ApplicationManager.h"
 
 // Use node::Buffer to replace v8 api,to avoid link err in editor platform.
 #if CC_EDITOR && CC_PLATFORM == CC_PLATFORM_WINDOWS
@@ -163,6 +164,54 @@ Object *Object::createPlainObject() {
     return obj;
 }
 
+std::unordered_map<Object*, v8::Persistent<v8::Promise::Resolver>*> Object::resolverMap;
+
+void Object::resolverPromise(Object *object, const Value &value) {
+    auto it = resolverMap.find(object);
+    if (it != resolverMap.end()) {
+        v8::Isolate *isolate = __isolate;
+        v8::HandleScope scope(isolate);
+        v8::Local<v8::Context> context = isolate->GetCurrentContext();
+        auto* resolver = it->second;
+        v8::Local<v8::Value> v8Val;
+        se::internal::seToJsValue(__isolate, value, &v8Val);
+        resolver->Get(isolate)->Resolve(context, v8Val).ToChecked();
+        resolver->Reset();
+        delete resolver;
+        resolverMap.erase(it);
+    }
+}
+
+void Object::rejectPromise(Object *object, const Value &value) {
+    auto it = resolverMap.find(object);
+    if (it != resolverMap.end()) {
+        v8::Isolate *isolate = __isolate;
+        v8::HandleScope scope(isolate);
+        v8::Local<v8::Context> context = isolate->GetCurrentContext();
+        auto* resolver = it->second;
+        v8::Local<v8::Value> v8Val;
+        se::internal::seToJsValue(isolate, value, &v8Val);
+        resolver->Get(isolate)->Reject(context, v8Val).ToChecked();
+        resolver->Reset();
+        delete resolver;
+        resolverMap.erase(it);
+    }
+}
+
+Object *Object::createPromise() {
+    v8::Isolate *isolate = __isolate;
+    v8::HandleScope handleScope(isolate);
+    v8::Local<v8::Promise::Resolver> resolver = v8::Promise::Resolver::New(isolate->GetCurrentContext()).ToLocalChecked();
+    v8::Local<v8::Promise> v8Promise = resolver->GetPromise();
+    auto *persistentResolver = new v8::Persistent<v8::Promise::Resolver>(isolate, resolver);
+
+    v8::Local<v8::Object> jsobj = v8::Local<v8::Object>::Cast(v8Promise);
+    auto *obj = Object::_createJSObject(nullptr, jsobj);
+    resolverMap[obj] = persistentResolver;
+
+    return obj;
+}
+
 Object *Object::createMapObject() {
     v8::Local<v8::Map> jsobj = v8::Map::New(__isolate);
     return _createJSObject(nullptr, jsobj);
@@ -271,10 +320,6 @@ Object *Object::createTypedArray(TypedArrayType type, const void *data, size_t b
         return nullptr;
     }
 
-    if (type == TypedArrayType::UINT8_CLAMPED) {
-        SE_LOGE("Doesn't support to create Uint8ClampedArray with Object::createTypedArray API!");
-        return nullptr;
-    }
     #if CC_EDITOR && CC_PLATFORM == CC_PLATFORM_WINDOWS
     auto nodeBuffer = node::Buffer::New(__isolate, byteLength);
     auto *srcData = node::Buffer::Data(nodeBuffer.ToLocalChecked());
@@ -304,6 +349,9 @@ Object *Object::createTypedArray(TypedArrayType type, const void *data, size_t b
             break;
         case TypedArrayType::UINT8:
             arr = v8::Uint8Array::New(jsobj, 0, byteLength);
+            break;
+        case TypedArrayType::UINT8_CLAMPED:
+            arr = v8::Uint8ClampedArray::New(jsobj, 0, byteLength);
             break;
         case TypedArrayType::UINT16:
             arr = v8::Uint16Array::New(jsobj, 0, byteLength / 2);
@@ -343,11 +391,6 @@ Object *Object::createTypedArrayWithBuffer(TypedArrayType type, const Object *ob
         return nullptr;
     }
 
-    if (type == TypedArrayType::UINT8_CLAMPED) {
-        SE_LOGE("Doesn't support to create Uint8ClampedArray with Object::createTypedArray API!");
-        return nullptr;
-    }
-
     v8::Local<v8::Object> typedArray;
     CC_ASSERT(obj->isArrayBuffer());
     v8::Local<v8::ArrayBuffer> jsobj = obj->_getJSObject().As<v8::ArrayBuffer>();
@@ -363,6 +406,9 @@ Object *Object::createTypedArrayWithBuffer(TypedArrayType type, const Object *ob
             break;
         case TypedArrayType::UINT8:
             typedArray = v8::Uint8Array::New(jsobj, offset, byteLength);
+            break;
+        case TypedArrayType::UINT8_CLAMPED:
+            typedArray = v8::Uint8ClampedArray::New(jsobj, offset, byteLength);
             break;
         case TypedArrayType::UINT16:
             typedArray = v8::Uint16Array::New(jsobj, offset, byteLength / 2);
@@ -395,6 +441,25 @@ Object *Object::createJSONObject(const ccstd::string &jsonStr) {
     internal::seToJsValue(__isolate, strVal, &jsStr);
     v8::Local<v8::String> v8Str = v8::Local<v8::String>::Cast(jsStr);
     v8::MaybeLocal<v8::Value> ret = v8::JSON::Parse(context, v8Str);
+    if (ret.IsEmpty()) {
+        return nullptr;
+    }
+
+    v8::Local<v8::Object> jsobj = v8::Local<v8::Object>::Cast(ret.ToLocalChecked());
+    return Object::_createJSObject(nullptr, jsobj);
+}
+
+Object *Object::createJSONObject(std::u16string &&jsonStr) {
+    auto *external = ccnew internal::ExternalStringResource(std::move(jsonStr));
+    auto v8Str = v8::String::NewExternalTwoByte(__isolate, external);
+    if (v8Str.IsEmpty()) {
+        return nullptr;
+    }
+
+    v8::Local<v8::Context> context = __isolate->GetCurrentContext();
+    v8::MaybeLocal<v8::Value> ret = v8::JSON::Parse(context, v8Str.ToLocalChecked());
+    // After v8::JSON::Parse, the memory of u16string could be freed.
+    external->freeMemory();
     if (ret.IsEmpty()) {
         return nullptr;
     }
@@ -593,6 +658,8 @@ Object::TypedArrayType Object::getTypedArrayType() const {
         ret = TypedArrayType::UINT16;
     } else if (value->IsUint8Array()) {
         ret = TypedArrayType::UINT8;
+    } else if (value->IsUint8ClampedArray()) {
+        ret = TypedArrayType::UINT8_CLAMPED;
     } else if (value->IsInt32Array()) {
         ret = TypedArrayType::INT32;
     } else if (value->IsInt16Array()) {
@@ -743,17 +810,7 @@ bool Object::call(const ValueArray &args, Object *thisObject, Value *rval /* = n
     }
 
     v8::Local<v8::Context> context = se::ScriptEngine::getInstance()->_getContext();
-    #if CC_DEBUG
-    v8::TryCatch tryCatch(__isolate);
-    #endif
     v8::MaybeLocal<v8::Value> result = _obj.handle(__isolate)->CallAsFunction(context, thiz, static_cast<int>(argc), pArgv);
-
-    #if CC_DEBUG
-    if (tryCatch.HasCaught()) {
-        v8::String::Utf8Value stack(__isolate, tryCatch.StackTrace(__isolate->GetCurrentContext()).ToLocalChecked());
-        SE_REPORT_ERROR("Invoking function failed, %s", *stack);
-    }
-    #endif
 
     if (!result.IsEmpty()) {
         if (rval != nullptr) {
